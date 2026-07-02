@@ -1,8 +1,14 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #020613;
+  --foreground: #e8fbff;
+  --panel: #071421;
+  --panel-soft: #0b1c2c;
+  --cyan: #13d9ff;
+  --cyan-soft: rgba(19, 217, 255, 0.16);
+  --mint: #42ffd0;
+  --danger: #ff647c;
 }
 
 @theme inline {
@@ -12,15 +18,70 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body::before {
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  content: "";
+  background:
+    linear-gradient(135deg, rgba(19, 217, 255, 0.08), transparent 28%),
+    radial-gradient(circle at 80% 10%, rgba(66, 255, 208, 0.1), transparent 26%),
+    #020613;
+}
+
+body::after {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  content: "";
+  background-image:
+    linear-gradient(rgba(19, 217, 255, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(19, 217, 255, 0.06) 1px, transparent 1px);
+  background-size: 42px 42px;
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.58), transparent);
+}
+
+button,
+a,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+.scan-frame {
+  background:
+    linear-gradient(var(--cyan), var(--cyan)) left top / 34px 2px no-repeat,
+    linear-gradient(var(--cyan), var(--cyan)) left top / 2px 34px no-repeat,
+    linear-gradient(var(--cyan), var(--cyan)) right top / 34px 2px no-repeat,
+    linear-gradient(var(--cyan), var(--cyan)) right top / 2px 34px no-repeat,
+    linear-gradient(var(--cyan), var(--cyan)) left bottom / 34px 2px no-repeat,
+    linear-gradient(var(--cyan), var(--cyan)) left bottom / 2px 34px no-repeat,
+    linear-gradient(var(--cyan), var(--cyan)) right bottom / 34px 2px no-repeat,
+    linear-gradient(var(--cyan), var(--cyan)) right bottom / 2px 34px no-repeat;
+}
+
+.barcode {
+  background: repeating-linear-gradient(
+    90deg,
+    #0b0b0d 0 3px,
+    #f7fbff 3px 5px,
+    #0b0b0d 5px 9px,
+    #f7fbff 9px 12px
+  );
 }
