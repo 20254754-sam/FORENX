@@ -1,33 +1,21 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
+import { ForenxStoreProvider } from "./ui/forenx-store";
+import { PwaRegister } from "./ui/pwa-register";
 
 export const metadata: Metadata = {
   title: "FORENX Evidence Tracking",
-  description: "Barcode-based evidence tracking prototype",
+  description: "Barcode-based evidence tracking website prototype",
+  manifest: "/manifest.webmanifest"
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-    >
-      <body className="min-h-full flex flex-col">{children}</body>
+    <html lang="en">
+      <body>
+        <ForenxStoreProvider>{children}</ForenxStoreProvider>
+        <PwaRegister />
+      </body>
     </html>
   );
 }

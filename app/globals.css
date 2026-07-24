@@ -1,59 +1,47 @@
 @import "tailwindcss";
 
 :root {
-  --background: #020613;
+  --background: #050812;
   --foreground: #e8fbff;
-  --panel: #071421;
-  --panel-soft: #0b1c2c;
-  --cyan: #13d9ff;
-  --cyan-soft: rgba(19, 217, 255, 0.16);
-  --mint: #42ffd0;
-  --danger: #ff647c;
+  --cyanline: #10d8ff;
+  --panel: #071220;
+  --void: #050812;
+  --mint: #40ffcb;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  --color-cyanline: var(--cyanline);
+  --color-panel: var(--panel);
+  --color-void: var(--void);
+  --color-mint: var(--mint);
 }
 
 * {
   box-sizing: border-box;
 }
 
-body::before {
-  position: fixed;
-  inset: 0;
-  z-index: -2;
-  content: "";
-  background:
-    linear-gradient(135deg, rgba(19, 217, 255, 0.08), transparent 28%),
-    radial-gradient(circle at 80% 10%, rgba(66, 255, 208, 0.1), transparent 26%),
-    #020613;
+html {
+  background: var(--background);
+  overflow-x: hidden;
 }
 
-body::after {
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  content: "";
-  background-image:
-    linear-gradient(rgba(19, 217, 255, 0.08) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(19, 217, 255, 0.06) 1px, transparent 1px);
-  background-size: 42px 42px;
-  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.58), transparent);
+body {
+  min-height: 100vh;
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+  overflow-x: hidden;
+  text-rendering: optimizeLegibility;
+}
+
+a {
+  text-decoration: none;
 }
 
 button,
-a,
 input,
 select,
 textarea {
@@ -64,16 +52,156 @@ button {
   cursor: pointer;
 }
 
-.scan-frame {
-  background:
-    linear-gradient(var(--cyan), var(--cyan)) left top / 34px 2px no-repeat,
-    linear-gradient(var(--cyan), var(--cyan)) left top / 2px 34px no-repeat,
-    linear-gradient(var(--cyan), var(--cyan)) right top / 34px 2px no-repeat,
-    linear-gradient(var(--cyan), var(--cyan)) right top / 2px 34px no-repeat,
-    linear-gradient(var(--cyan), var(--cyan)) left bottom / 34px 2px no-repeat,
-    linear-gradient(var(--cyan), var(--cyan)) left bottom / 2px 34px no-repeat,
-    linear-gradient(var(--cyan), var(--cyan)) right bottom / 34px 2px no-repeat,
-    linear-gradient(var(--cyan), var(--cyan)) right bottom / 2px 34px no-repeat;
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.btn-primary,
+.btn-secondary {
+  display: inline-flex;
+  min-height: 2.35rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid;
+  padding: 0.48rem 0.78rem;
+  font-size: 0.875rem;
+  font-weight: 700;
+  line-height: 1.2rem;
+  text-align: center;
+}
+
+.btn-primary {
+  border-color: #0e7490;
+  background: #0a5a70;
+  color: #f8fafc;
+}
+
+.btn-primary:hover {
+  background: #0b6f88;
+}
+
+.btn-secondary {
+  border-color: #334155;
+  background: #06101c;
+  color: #cbd5e1;
+}
+
+.btn-secondary:hover {
+  border-color: #0e7490;
+  color: #f8fafc;
+}
+
+.label {
+  display: block;
+  color: #94a3b8;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.input {
+  min-height: 2.35rem;
+  width: 100%;
+  border: 1px solid #334155;
+  background: #050d17;
+  padding: 0.54rem 0.72rem;
+  color: #f8fafc;
+  outline: none;
+}
+
+.input:focus {
+  border-color: #10d8ff;
+}
+
+.role-card {
+  min-height: 2.8rem;
+  border-width: 1px;
+  background: #050d17;
+  padding: 0.65rem;
+  text-align: left;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.status-pill {
+  display: inline-flex;
+  min-height: 1.45rem;
+  align-items: center;
+  border: 1px solid #334155;
+  background: #081827;
+  padding: 0.15rem 0.45rem;
+  color: #cbd5e1;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  text-align: left;
+  font-size: 0.84rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.data-table thead {
+  border-bottom: 1px solid #1e293b;
+  color: #64748b;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.data-table th,
+.data-table td {
+  padding: 0.68rem 0.72rem 0.68rem 0;
+  vertical-align: top;
+  overflow: hidden;
+}
+
+.data-table tbody tr {
+  border-bottom: 1px solid #1e293b;
+}
+
+.data-table tbody tr:hover {
+  background: #081827;
+}
+
+.table-cell-text {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.signature-image {
+  display: block;
+  height: 2.6rem;
+  max-width: 8.5rem;
+  width: 8.5rem;
+  border: 1px solid #223044;
+  background: #07131f;
+  object-fit: contain;
+}
+
+.signature-written {
+  display: block;
+  max-width: 8.5rem;
+  overflow: hidden;
+  border: 1px solid #223044;
+  background: #06101c;
+  padding: 0.28rem 0.45rem;
+  color: #d8f7ff;
+  font-family: "Brush Script MT", "Segoe Script", cursive;
+  font-size: 1rem;
+  line-height: 1.25rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .barcode {
@@ -84,4 +212,78 @@ button {
     #0b0b0d 5px 9px,
     #f7fbff 9px 12px
   );
+}
+
+.scan-window {
+  display: grid;
+  min-height: 15rem;
+  place-items: center;
+  border: 1px solid #1e3a4a;
+  background:
+    linear-gradient(#0b1b2a 1px, transparent 1px),
+    linear-gradient(90deg, #0b1b2a 1px, transparent 1px),
+    #050d17;
+  background-size: 28px 28px;
+  text-align: center;
+}
+
+.spatial-preview {
+  position: relative;
+  min-height: 19rem;
+  overflow: hidden;
+  border: 1px solid #1e3a4a;
+  background:
+    linear-gradient(#0b1b2a 1px, transparent 1px),
+    linear-gradient(90deg, #0b1b2a 1px, transparent 1px),
+    #050d17;
+  background-size: 30px 30px;
+}
+
+.cube-face {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  height: 9rem;
+  width: 9rem;
+  transform: translate(-50%, -50%) rotate(45deg) skew(12deg, 12deg);
+  border: 2px solid #10d8ff;
+  opacity: 0.72;
+}
+
+.grid-lines {
+  position: absolute;
+  inset: 18%;
+  border: 1px solid rgba(16, 216, 255, 0.28);
+}
+
+::-webkit-scrollbar {
+  height: 10px;
+  width: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: #050812;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #25364b;
+  border: 2px solid #050812;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3a536d;
+}
+
+@media print {
+  nav,
+  header,
+  .btn-primary,
+  .btn-secondary {
+    display: none !important;
+  }
+
+  body {
+    background: white;
+    color: black;
+  }
 }

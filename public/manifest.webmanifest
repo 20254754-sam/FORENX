@@ -1,0 +1,16 @@
+{
+  "name": "FORENX Evidence Tracking",
+  "short_name": "FORENX",
+  "description": "Barcode-based evidence tracking pilot.",
+  "start_url": "/login",
+  "display": "standalone",
+  "background_color": "#050812",
+  "theme_color": "#050812",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "48x48",
+      "type": "image/x-icon"
+    }
+  ]
+}
