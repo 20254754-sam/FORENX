@@ -506,9 +506,16 @@ function LoginView() {
     <main className="min-h-screen bg-[#030812] text-slate-100">
       <div className="login-shell grid min-h-screen min-w-0 grid-cols-1 lg:h-screen lg:overflow-hidden lg:grid-cols-[minmax(0,1.12fr)_minmax(430px,0.88fr)]">
         <section
-          className="login-hero relative flex h-[17rem] shrink-0 min-w-0 overflow-hidden border-b border-slate-800 bg-cover bg-center sm:h-[22rem] lg:h-full lg:border-b-0 lg:border-r"
-          style={{ backgroundImage: "url('/images/forenx-login-evidence.png')" }}
+          className="login-hero relative flex h-[17rem] shrink-0 min-w-0 overflow-hidden border-b border-slate-800 sm:h-[22rem] lg:h-full lg:border-b-0 lg:border-r"
         >
+          <Image
+            src="/images/forenx-login-evidence.png"
+            alt=""
+            fill
+            priority
+            sizes="(min-width: 1024px) 56vw, 100vw"
+            className="object-cover object-center"
+          />
           <div className="absolute inset-0 bg-[#020711]/70" />
           <span className="login-scan-grid" aria-hidden="true" />
           <span className="login-target login-target-top" aria-hidden="true" />
@@ -540,15 +547,12 @@ function LoginView() {
               </div>
             </div>
 
-            <div className="login-mode-tabs mt-7 grid min-w-0 grid-cols-3 gap-2 border-b border-slate-800 pb-4">
+            <div className="login-mode-tabs mt-7 grid min-w-0 grid-cols-2 gap-2 border-b border-slate-800 pb-4">
               <button className={mode === "Supabase" ? "btn-primary min-h-10" : "btn-secondary min-h-10"} type="button" onClick={() => setMode("Supabase")}>
                 Secure account
               </button>
               <button className={mode === "Request" ? "btn-primary min-h-10" : "btn-secondary min-h-10"} type="button" onClick={() => setMode("Request")}>
                 Request access
-              </button>
-              <button className={mode === "Support" ? "btn-primary min-h-10" : "btn-secondary min-h-10"} type="button" onClick={() => setMode("Support")}>
-                Contact admin
               </button>
             </div>
 

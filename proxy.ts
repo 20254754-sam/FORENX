@@ -100,5 +100,7 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|icon.png).*)"]
+  // Public assets must bypass page authentication. Redirecting an image request
+  // to /login returns HTML instead of an image and breaks logos and media.
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|icon.png|images/|manifest.webmanifest).*)"]
 };
