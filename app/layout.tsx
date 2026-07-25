@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import "./globals.css";
 import { ForenxStoreProvider } from "./ui/forenx-store";
 import { PwaRegister } from "./ui/pwa-register";
@@ -13,7 +14,11 @@ export const metadata: Metadata = {
   }
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+// The proxy creates a per-request CSP nonce. Reading request headers keeps the
+// app shell dynamic so Next attaches that nonce to its runtime scripts.
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  await headers();
+
   return (
     <html lang="en">
       <body>
