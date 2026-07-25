@@ -455,7 +455,7 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
     return () => window.clearTimeout(timer);
   }, [loadSharedEvidence]);
 
-  const loadSupabaseProfile = useCallback(async (id: string, email: string) => {
+  const loadSupabaseProfile = useCallback(async (id: string, email: string, announceSignIn = false) => {
     if (!supabase) {
       setAuthReady(true);
       return false;
@@ -519,7 +519,7 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
     setAuthMode("Supabase");
     setIsAuthenticated(true);
     setAuthReady(true);
-    setMessage(`Signed in as ${profileRole}.`);
+    if (announceSignIn) setMessage(`Signed in as ${profileRole}.`);
     void supabase.rpc("touch_my_profile_activity");
     return true;
   }, []);
@@ -612,7 +612,7 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
       return false;
     }
 
-    return loadSupabaseProfile(data.user.id, data.user.email);
+    return loadSupabaseProfile(data.user.id, data.user.email, true);
   }, [loadSupabaseProfile]);
 
   const refreshSession = useCallback(async () => {
