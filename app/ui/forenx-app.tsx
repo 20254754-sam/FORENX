@@ -4,7 +4,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import type { ChangeEvent, ComponentType, PointerEvent, ReactNode } from "react";
+import type { ChangeEvent, ComponentType, KeyboardEvent, PointerEvent, ReactNode } from "react";
 import {
   Activity,
   Archive,
@@ -42,6 +42,7 @@ const navItems: NavItem[] = [
   { label: "Dashboard", href: "/dashboard", icon: Home, roles: allRoles },
   { label: "Users", href: "/admin/users", icon: Users, roles: ["System Admin"] },
   { label: "Barcodes", href: "/admin/barcodes", icon: QrCode, roles: ["System Admin"] },
+  { label: "Evidence lookup", href: "/admin/lookup", icon: ScanLine, roles: ["System Admin"] },
   { label: "Create evidence", href: "/scan", icon: ScanLine, roles: ["Investigator"], workflow: true },
   { label: "Capture", href: "/capture", icon: Box, roles: ["Investigator"], visible: false },
   { label: "Evidence", href: "/evidence", icon: FileText, roles: ["Investigator", "Laboratory Analyst"], hiddenFor: ["Investigator"] },
@@ -67,6 +68,8 @@ export default function ForenxApp({ view }: { view: AppView }) {
   const router = useRouter();
   const store = useForenxStore();
   const { authMode, authReady, isAuthenticated, refreshSession } = store;
+  const route = navItems.find((item) => item.href === pathname);
+  const roleHasAccess = !route || route.roles.includes(store.role);
 
   useEffect(() => {
     if (view === "login" || !isAuthenticated || authMode !== "Supabase") return;
@@ -85,10 +88,21 @@ export default function ForenxApp({ view }: { view: AppView }) {
     };
   }, [authMode, isAuthenticated, refreshSession, router, view]);
 
-  if (view === "login") return <LoginView />;
+  useEffect(() => {
+    if (view !== "login" && authReady && isAuthenticated && !roleHasAccess) {
+      router.replace("/dashboard");
+    }
+  }, [authReady, isAuthenticated, roleHasAccess, router, view]);
 
-  const route = navItems.find((item) => item.href === pathname);
-  const roleHasAccess = !route || route.roles.includes(store.role);
+  if (view === "login") {
+    return (
+      <>
+        <LoginView />
+        <ActionToast />
+      </>
+    );
+  }
+
   const showEvidenceWorkflow = store.isAuthenticated && store.role === "Investigator" && evidenceWorkflowPaths.includes(pathname);
 
   let content: ReactNode;
@@ -104,6 +118,7 @@ export default function ForenxApp({ view }: { view: AppView }) {
         {view === "dashboard" && <DashboardView />}
         {view === "admin-users" && <AdminUsersView />}
         {view === "admin-barcodes" && <BarcodeView />}
+        {view === "admin-lookup" && <AdminEvidenceLookupView />}
         {view === "scan" && <ScanView />}
         {view === "capture" && <CaptureView />}
         {view === "evidence" && <EvidenceView />}
@@ -116,26 +131,47 @@ export default function ForenxApp({ view }: { view: AppView }) {
   }
 
   return (
-    <main className="min-h-screen overflow-x-hidden bg-void text-slate-100">
-      <div className="mx-auto flex min-h-screen w-full max-w-[1680px] flex-col">
+    <main className="command-shell min-h-screen overflow-x-hidden bg-void text-slate-100">
+      <div className="flex min-h-screen w-full flex-col">
         <TopBar />
         <div className={`min-h-0 flex-1 ${store.isAuthenticated ? "grid lg:grid-cols-[208px_minmax(0,1fr)]" : "flex"}`}>
           {store.isAuthenticated && <SideNav pathname={pathname} role={store.role} />}
-          <section className="min-w-0 flex-1 overflow-x-hidden border-t border-slate-900 bg-[#06101c] p-3 pb-20 sm:p-4 lg:pb-4">
+          <section className="command-workspace min-w-0 flex-1 overflow-x-hidden p-3 pb-20 sm:p-4 lg:pb-4">
             {store.isAuthenticated && <StatusStrip />}
             {showEvidenceWorkflow && <EvidenceWorkflowProgress record={store.activeEvidence} />}
             <div className={store.isAuthenticated ? "mt-3" : "mx-auto max-w-5xl"}>{content}</div>
           </section>
         </div>
       </div>
+      <ActionToast />
     </main>
+  );
+}
+
+function ActionToast() {
+  const { message, messageVersion, dismissedMessageVersion, dismissMessage } = useForenxStore();
+
+  useEffect(() => {
+    if (messageVersion === 0 || dismissedMessageVersion === messageVersion) return;
+
+    const timeout = window.setTimeout(dismissMessage, 3000);
+    return () => window.clearTimeout(timeout);
+  }, [dismissMessage, dismissedMessageVersion, messageVersion]);
+
+  if (messageVersion === 0 || dismissedMessageVersion === messageVersion) return null;
+
+  return (
+    <div className="action-toast" role="status" aria-live="polite">
+      <ShieldCheck className="h-5 w-5 shrink-0 text-emerald-300" />
+      <p>{message}</p>
+    </div>
   );
 }
 
 function LoginRequired() {
   return (
     <Panel eyebrow="Authentication required" title="Sign in to open this workspace">
-      <p className="text-sm text-slate-400">Choose a demo role from the sign-in screen before opening protected records.</p>
+      <p className="text-sm text-slate-400">Sign in to view records.</p>
       <Link className="btn-primary mt-3" href="/login">Open sign in</Link>
     </Panel>
   );
@@ -146,7 +182,7 @@ function SessionRestoreView() {
     <Panel eyebrow="Session" title="Restoring secure session">
       <div className="flex items-center gap-3 text-sm text-slate-400">
         <span className="h-2 w-2 shrink-0 animate-pulse bg-cyan-300" />
-        Checking account access and workspace permissions.
+        Checking access.
       </div>
     </Panel>
   );
@@ -155,7 +191,7 @@ function SessionRestoreView() {
 function RestrictedView() {
   return (
     <Panel eyebrow="Restricted route" title="Role access required">
-      <p className="text-sm text-slate-400">Your current role does not include access to this workspace.</p>
+      <p className="text-sm text-slate-400">This role has no access here.</p>
       <Link className="btn-primary mt-3" href="/dashboard">Return to dashboard</Link>
     </Panel>
   );
@@ -171,18 +207,16 @@ function TopBar() {
   }
 
   return (
-    <header className="border-b border-cyan-950 bg-[#040b14] px-3 py-3 sm:px-5">
-      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+    <header className="command-header px-3 py-2.5 sm:px-5">
+      <div className="flex flex-col gap-2.5 xl:flex-row xl:items-center xl:justify-between">
         <div className="flex min-w-0 items-center gap-3">
-          <div className="grid h-10 w-10 shrink-0 place-items-center border border-cyanline/45 bg-[#071724] text-lg font-black text-cyan-200 sm:h-12 sm:w-12 sm:text-xl">
-            X
-          </div>
+          <Image className="forenx-mark" src="/images/forenx-x-logo.png" alt="" width={44} height={44} priority />
           <div className="min-w-0">
             <p className="hidden truncate text-[10px] font-bold uppercase tracking-[0.28em] text-cyan-300 sm:block">
               Barcode-based evidence tracking system
             </p>
-            <h1 className="text-3xl font-black leading-none tracking-[0.06em] text-white sm:mt-0.5 sm:text-[2.25rem]">
-              FOREN<span className="text-cyan-300">X</span>
+            <h1 className="sm:mt-0.5">
+              <Image className="forenx-wordmark-image" src="/images/forenx-wordmark.png" alt="FORENX" width={1284} height={180} priority />
             </h1>
             <p className="mt-1 hidden truncate text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 md:block">
               Digital chain of custody for modern law enforcement
@@ -190,7 +224,7 @@ function TopBar() {
           </div>
         </div>
         {authReady ? (
-          <div className="grid min-w-0 grid-cols-2 gap-2 text-xs sm:grid-cols-[minmax(170px,1fr)_minmax(140px,1fr)_auto] xl:w-[540px]">
+          <div className="hidden min-w-0 grid-cols-2 gap-2 text-xs lg:grid lg:grid-cols-[minmax(170px,1fr)_minmax(140px,1fr)_auto] xl:w-[540px]">
             <HeaderStat icon={ShieldCheck} label="Role" value={role} />
             <HeaderStat icon={Activity} label="User" value={currentUser.badgeId} />
             <button className="btn-secondary col-span-2 min-h-[48px] gap-2 px-3 text-left sm:col-span-1 sm:min-h-[52px]" type="button" onClick={handleSignOut}>
@@ -202,7 +236,7 @@ function TopBar() {
             </button>
           </div>
         ) : (
-          <div className="w-full xl:w-[220px]">
+          <div className="hidden w-full lg:block xl:w-[220px]">
             <HeaderStat icon={Activity} label="Session" value="Restoring..." />
           </div>
         )}
@@ -221,7 +255,7 @@ function HeaderStat({
   value: string;
 }) {
   return (
-    <div className="flex min-w-0 items-center gap-2 border border-slate-800 bg-[#07131f] px-3 py-2">
+    <div className="header-stat flex min-w-0 items-center gap-2 px-3 py-2">
       <Icon className="h-4 w-4 shrink-0 text-cyan-300" />
       <div className="min-w-0">
         <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">{label}</p>
@@ -235,13 +269,18 @@ function SideNav({ pathname, role }: { pathname: string; role: Role }) {
   const visibleItems = navItems.filter(
     (item) => item.roles.includes(role) && item.visible !== false && !item.hiddenFor?.includes(role)
   );
-  const mobileColumns = visibleItems.length === 4 ? "grid-cols-4" : "grid-cols-5";
+  const settingsItem = visibleItems.find((item) => item.href === "/settings");
+  const mobileItems = [
+    ...visibleItems.filter((item) => item.href !== "/settings").slice(0, 4),
+    ...(settingsItem ? [settingsItem] : [])
+  ].slice(0, 5);
+  const mobileColumns = mobileItems.length === 4 ? "grid-cols-4" : "grid-cols-5";
 
   return (
     <>
-      <nav className="hidden border-r border-slate-900 bg-[#040b14] p-3 lg:block">
-        <p className="px-2 pb-3 pt-1 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-600">
-          Navigation
+      <nav className="command-nav hidden p-3 lg:block">
+        <p className="px-2 pb-3 pt-1 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">
+          {role === "Investigator" ? "Field workflow" : role === "Laboratory Analyst" ? "Laboratory workspace" : "System control"}
         </p>
         <div className="space-y-1">
           {visibleItems.map((item) => (
@@ -249,8 +288,8 @@ function SideNav({ pathname, role }: { pathname: string; role: Role }) {
           ))}
         </div>
       </nav>
-      <nav className={`fixed inset-x-0 bottom-0 z-30 grid ${mobileColumns} border-t border-slate-800 bg-[#040b14] p-1 lg:hidden`}>
-        {visibleItems.slice(0, 5).map((item) => (
+      <nav className={`command-mobile-nav fixed inset-x-0 bottom-0 z-30 grid ${mobileColumns} p-1 lg:hidden`}>
+        {mobileItems.map((item) => (
           <MobileNavLink key={item.href} item={item} active={isNavItemActive(item, pathname)} />
         ))}
       </nav>
@@ -261,17 +300,34 @@ function SideNav({ pathname, role }: { pathname: string; role: Role }) {
 function NavLink({ item, active }: { item: NavItem; active: boolean }) {
   const Icon = item.icon;
   const { startNewEvidence } = useForenxStore();
+  const router = useRouter();
+
+  if (item.workflow) {
+    return (
+      <button
+        type="button"
+        onClick={async () => {
+          if (await startNewEvidence()) router.push(item.href);
+        }}
+        className={`command-nav-link flex min-w-0 w-full items-center gap-3 border-l-2 px-3 py-2.5 text-left text-sm ${
+          active
+            ? "border-cyanline text-white"
+            : "border-transparent text-slate-500 hover:text-slate-200"
+        }`}
+      >
+        <Icon className={`h-4 w-4 ${active ? "text-cyan-300" : "text-slate-500"}`} />
+        <span className="min-w-0 truncate">{item.label}</span>
+      </button>
+    );
+  }
 
   return (
     <Link
       href={item.href}
-      onClick={() => {
-        if (item.workflow) startNewEvidence();
-      }}
-      className={`flex min-w-0 items-center gap-3 border-l-2 px-3 py-2.5 text-sm ${
+      className={`command-nav-link flex min-w-0 items-center gap-3 border-l-2 px-3 py-2.5 text-sm ${
         active
-          ? "border-cyanline bg-[#0a1a29] text-white"
-          : "border-transparent text-slate-500 hover:bg-[#07131f] hover:text-slate-200"
+          ? "border-cyanline text-white"
+          : "border-transparent text-slate-500 hover:text-slate-200"
       }`}
     >
       <Icon className={`h-4 w-4 ${active ? "text-cyan-300" : "text-slate-500"}`} />
@@ -283,14 +339,29 @@ function NavLink({ item, active }: { item: NavItem; active: boolean }) {
 function MobileNavLink({ item, active }: { item: NavItem; active: boolean }) {
   const Icon = item.icon;
   const { startNewEvidence } = useForenxStore();
+  const router = useRouter();
+
+  if (item.workflow) {
+    return (
+      <button
+        type="button"
+        onClick={async () => {
+          if (await startNewEvidence()) router.push(item.href);
+        }}
+        className={`command-mobile-link flex min-h-12 flex-col items-center justify-center gap-1 text-[10px] ${
+          active ? "text-cyan-300" : "text-slate-500"
+        }`}
+      >
+        <Icon className="h-4 w-4" />
+        <span className="max-w-full truncate">{item.label}</span>
+      </button>
+    );
+  }
 
   return (
     <Link
       href={item.href}
-      onClick={() => {
-        if (item.workflow) startNewEvidence();
-      }}
-      className={`flex min-h-12 flex-col items-center justify-center gap-1 text-[10px] ${
+      className={`command-mobile-link flex min-h-12 flex-col items-center justify-center gap-1 text-[10px] ${
         active ? "text-cyan-300" : "text-slate-500"
       }`}
     >
@@ -310,7 +381,7 @@ function EvidenceWorkflowProgress({ record }: { record: Evidence }) {
   const steps = ["Barcode", "Capture", "Details", "Transfer"];
 
   return (
-    <section className="mt-3 border border-slate-800 bg-[#07131f] px-3 py-2.5" aria-label="Create evidence progress">
+    <section className="workflow-strip mt-3" aria-label="Create evidence progress">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-cyan-300">Create evidence</p>
         <p className="text-xs font-semibold text-slate-400">
@@ -322,13 +393,13 @@ function EvidenceWorkflowProgress({ record }: { record: Evidence }) {
           const step = index + 1;
           const state = step <= completed ? "complete" : step === currentStep ? "current" : "upcoming";
           const stateClass = {
-            complete: "border-emerald-900 bg-emerald-950 text-emerald-200",
-            current: "border-cyan-800 bg-cyan-950 text-cyan-100",
-            upcoming: "border-slate-800 bg-[#050d17] text-slate-500"
+            complete: "workflow-step-complete",
+            current: "workflow-step-current",
+            upcoming: "workflow-step-upcoming"
           }[state];
 
           return (
-            <li key={label} className={`flex min-w-0 items-center gap-1.5 border px-1.5 py-1.5 sm:px-2 ${stateClass}`}>
+            <li key={label} className={`workflow-step flex min-w-0 items-center gap-1.5 px-1.5 py-1.5 sm:px-2 ${stateClass}`}>
               <span className="grid h-5 w-5 shrink-0 place-items-center border border-current text-[10px] font-bold">{step}</span>
               <span className="min-w-0 truncate text-[10px] font-semibold uppercase tracking-wide sm:text-[11px]">{label}</span>
             </li>
@@ -347,11 +418,23 @@ function getWorkflowCompletedSteps(record: Evidence) {
   return completed;
 }
 
+function resumeEvidencePath(record: Evidence) {
+  if (record.status === "Draft") {
+    if (!record.barcode) return "/scan";
+    if (record.spatialCaptureStatus !== "Captured") return "/capture";
+    return "/evidence";
+  }
+
+  if (record.status === "Logged") return "/transfer";
+  return "/history";
+}
+
 function StatusStrip() {
   const { activeEvidence, currentUser, role } = useForenxStore();
+  const hasActiveEvidence = activeEvidence.id !== "EV-DRAFT" || Boolean(activeEvidence.recoveryDateTime);
 
   return (
-    <div className="flex flex-col gap-2 border border-slate-800 bg-[#07131f] px-3 py-2.5 text-xs text-slate-300 md:flex-row md:items-center md:justify-between">
+    <div className="flex min-h-10 flex-col gap-2 border border-slate-800 bg-[#07131f] px-3 py-2 text-xs text-slate-300 md:flex-row md:items-center md:justify-between">
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5">
         <span className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.14em] text-emerald-300">
           <span className="h-1.5 w-1.5 shrink-0 bg-emerald-400" />
@@ -361,16 +444,17 @@ function StatusStrip() {
         <span className="font-semibold text-white">{role}</span>
         <span className="min-w-0 truncate font-mono text-slate-400">{currentUser.email}</span>
       </div>
-      {role === "System Admin" ? (
+      {role !== "System Admin" && (
         <div className="flex shrink-0 items-center gap-2">
-          <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-600">Admin scope</span>
-          <span className="text-xs font-semibold text-slate-300">Accounts, barcode batches, and custody review</span>
-        </div>
-      ) : (
-        <div className="flex shrink-0 items-center gap-2">
-          <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-600">Active evidence</span>
-          <span className="font-mono text-slate-300">{activeEvidence.id}</span>
-          <span className="status-pill">{activeEvidence.status}</span>
+          {hasActiveEvidence ? (
+            <>
+              <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-600">Active evidence</span>
+              <span className="font-mono text-slate-300">{activeEvidence.id}</span>
+              <span className="status-pill">{activeEvidence.status}</span>
+            </>
+          ) : (
+            <span className="text-[11px] font-semibold text-slate-500">No evidence selected</span>
+          )}
         </div>
       )}
     </div>
@@ -379,26 +463,19 @@ function StatusStrip() {
 
 function LoginView() {
   const router = useRouter();
-  const { role, signIn, signInWithPassword, signUpForAccess, submitSupportRequest, message } = useForenxStore();
+  const { signInWithPassword, signUpForAccess, submitSupportRequest, message } = useForenxStore();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [selectedRole, setSelectedRole] = useState<Role>(role);
   const [requestedRole, setRequestedRole] = useState<Extract<Role, "Investigator" | "Laboratory Analyst">>("Investigator");
   const [fullName, setFullName] = useState("");
   const [badgeId, setBadgeId] = useState("");
   const [agency, setAgency] = useState("");
   const [supportType, setSupportType] = useState<"Reactivation request" | "Sign-in issue" | "Other report">("Reactivation request");
   const [supportMessage, setSupportMessage] = useState("");
-  const [mode, setMode] = useState<"Supabase" | "Request" | "Support" | "Demo">("Supabase");
+  const [mode, setMode] = useState<"Supabase" | "Request" | "Support">("Supabase");
   const [submitting, setSubmitting] = useState(false);
 
   async function handleSubmit() {
-    if (mode === "Demo") {
-      signIn(selectedRole, email || "demo account");
-      router.push("/dashboard");
-      return;
-    }
-
     if (mode === "Request") {
       setSubmitting(true);
       await signUpForAccess({ fullName, email, password, requestedRole, badgeId, agency });
@@ -427,44 +504,51 @@ function LoginView() {
 
   return (
     <main className="min-h-screen bg-[#030812] text-slate-100">
-      <div className="grid min-h-screen lg:grid-cols-[minmax(0,1.12fr)_minmax(430px,0.88fr)]">
+      <div className="login-shell grid min-h-screen min-w-0 grid-cols-1 lg:h-screen lg:overflow-hidden lg:grid-cols-[minmax(0,1.12fr)_minmax(430px,0.88fr)]">
         <section
-          className="relative flex min-h-[44vh] overflow-hidden border-b border-slate-800 bg-cover bg-center lg:min-h-screen lg:border-b-0 lg:border-r"
+          className="login-hero relative flex h-[17rem] shrink-0 min-w-0 overflow-hidden border-b border-slate-800 bg-cover bg-center sm:h-[22rem] lg:h-full lg:border-b-0 lg:border-r"
           style={{ backgroundImage: "url('/images/forenx-login-evidence.png')" }}
         >
           <div className="absolute inset-0 bg-[#020711]/70" />
-          <div className="relative z-10 flex w-full flex-col px-6 py-6 sm:px-10 sm:py-9 lg:px-14 lg:py-12">
-            <div className="flex items-center gap-3">
-              <div className="grid h-11 w-11 place-items-center border border-cyanline/55 bg-[#04111d] text-lg font-black text-cyan-200">
-                X
-              </div>
-              <div>
+          <span className="login-scan-grid" aria-hidden="true" />
+          <span className="login-target login-target-top" aria-hidden="true" />
+          <span className="login-target login-target-bottom" aria-hidden="true" />
+          <div className="relative z-10 flex min-w-0 w-full flex-col px-6 py-5 sm:px-10 sm:py-9 lg:px-14 lg:py-12">
+            <div className="flex min-w-0 items-center gap-3">
+              <Image className="forenx-mark forenx-mark-login" src="/images/forenx-x-logo.png" alt="" width={50} height={50} priority />
+              <div className="min-w-0">
                 <p className="text-[10px] font-bold uppercase tracking-[0.24em] text-cyan-300">Evidence tracking system</p>
-                <h1 className="mt-1 text-3xl font-black tracking-[0.08em] text-white sm:text-4xl">FOREN<span className="text-cyan-300">X</span></h1>
+                <h1 className="mt-1">
+                  <Image className="forenx-wordmark-image forenx-wordmark-image-login" src="/images/forenx-wordmark.png" alt="FORENX" width={1284} height={180} priority />
+                </h1>
               </div>
             </div>
-            <div className="mt-auto max-w-lg border-l-2 border-cyanline pl-4">
+            <div className="mt-12 max-w-lg border-l-2 border-cyanline pl-4 sm:mt-auto">
               <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-cyan-200">Digital chain of custody</p>
-              <p className="mt-2 text-sm leading-6 text-slate-200 sm:text-base">Evidence records stay linked to their barcode, collection details, transfer history, and custody signatures.</p>
+              <p className="mt-2 text-sm leading-6 text-slate-200 sm:text-base">Track evidence from collection to lab.</p>
             </div>
           </div>
         </section>
 
-        <section className="flex items-center bg-[#050b14] px-5 py-8 sm:px-10 lg:px-14">
-          <div className="mx-auto w-full max-w-md">
-            <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-cyan-300">Secure access</p>
-            <h2 className="mt-2 text-2xl font-semibold text-white">{mode === "Request" ? "Request FORENX access" : mode === "Support" ? "Contact System Admin" : "Sign in to FORENX"}</h2>
-            <p className="mt-2 text-sm leading-6 text-slate-400">{mode === "Request" ? "Investigator and Laboratory Analyst access requires System Admin approval." : mode === "Support" ? "Report an inactive account, sign-in issue, or another access concern." : "Use your assigned account to open the appropriate workspace."}</p>
+        <section className="login-access flex min-w-0 items-center bg-[#050b14] px-5 py-8 sm:px-10 lg:overflow-y-auto lg:px-14">
+          <div className="login-form mx-auto min-w-0">
+            <div className="login-access-heading">
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-cyan-300">Secure access</p>
+                <h2 className="mt-2 text-2xl font-semibold text-white">{mode === "Request" ? "Request FORENX access" : mode === "Support" ? "Contact System Admin" : "Sign in to FORENX"}</h2>
+                <p className="mt-2 text-sm leading-6 text-slate-400">{mode === "Request" ? "Admin approval is required." : mode === "Support" ? "Report an access issue." : "Sign in to continue."}</p>
+              </div>
+            </div>
 
-            <div className="mt-7 grid grid-cols-3 gap-2 border-b border-slate-800 pb-4">
+            <div className="login-mode-tabs mt-7 grid min-w-0 grid-cols-3 gap-2 border-b border-slate-800 pb-4">
               <button className={mode === "Supabase" ? "btn-primary min-h-10" : "btn-secondary min-h-10"} type="button" onClick={() => setMode("Supabase")}>
                 Secure account
               </button>
               <button className={mode === "Request" ? "btn-primary min-h-10" : "btn-secondary min-h-10"} type="button" onClick={() => setMode("Request")}>
                 Request access
               </button>
-              <button className={mode === "Demo" ? "btn-primary min-h-10" : "btn-secondary min-h-10"} type="button" onClick={() => setMode("Demo")}>
-                Demo workspace
+              <button className={mode === "Support" ? "btn-primary min-h-10" : "btn-secondary min-h-10"} type="button" onClick={() => setMode("Support")}>
+                Contact admin
               </button>
             </div>
 
@@ -496,14 +580,12 @@ function LoginView() {
               </div>
             )}
 
-            {mode === "Demo" && <RolePicker value={selectedRole} onChange={setSelectedRole} />}
-
             <button className="btn-primary mt-6 w-full min-h-11" type="button" onClick={handleSubmit} disabled={submitting}>
-              {submitting ? "Submitting" : mode === "Request" ? "Submit access request" : mode === "Support" ? "Send report" : mode === "Supabase" ? "Sign in" : "Open demo workspace"}
+              {submitting ? "Submitting" : mode === "Request" ? "Submit access request" : mode === "Support" ? "Send report" : "Sign in"}
             </button>
 
             <div className="mt-4 border-l-2 border-slate-700 pl-3 text-xs leading-5 text-slate-400">
-              <span className="font-semibold text-slate-300">{mode === "Supabase" ? "Secure sign-in" : mode === "Request" ? "Pending review required" : mode === "Support" ? "Admin support queue" : "Presentation mode"}</span>
+              <span className="font-semibold text-slate-300">{mode === "Supabase" ? "Secure sign-in" : mode === "Request" ? "Pending review required" : "Admin support queue"}</span>
               <span className="block">{message}</span>
             </div>
             {mode !== "Support" && (
@@ -525,40 +607,221 @@ function LoginView() {
 
 function DashboardView() {
   const { role, users, evidence, barcodeBatches, custodyEvents } = useForenxStore();
+  const drafts = evidence.filter((item) => item.status === "Draft").length;
+  const readyForTransfer = evidence.filter((item) => item.status === "Logged").length;
   const inTransit = evidence.filter((item) => item.status === "In Transit").length;
   const inLab = evidence.filter((item) => item.status === "In Lab Custody").length;
+  const closed = evidence.filter((item) => item.status === "Closed").length;
+  const investigatorPriority = drafts > 0
+    ? "Complete a saved draft"
+    : readyForTransfer > 0
+      ? "Sign a transfer"
+      : inTransit > 0
+        ? "Await lab receipt"
+        : "No field work pending";
 
   return (
     <div className="space-y-3">
       <PageHeader
         eyebrow="Dashboard"
         title={`${role} workspace`}
-        text="Review work status, evidence movement, and system activity."
+        text="Evidence, transfers, and activity."
       />
-      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
-        <Metric icon={Users} label="Users" value={users.length.toString()} />
-        <Metric icon={Barcode} label="Barcode batches" value={barcodeBatches.length.toString()} />
-        <Metric icon={Archive} label="Custody events" value={custodyEvents.length.toString()} />
-        <Metric icon={FlaskConical} label="In lab" value={inLab.toString()} />
+      {role === "Investigator" && <InvestigatorWorkflowCommand />}
+      <div className="grid grid-cols-2 gap-2 xl:grid-cols-4">
+        {role === "System Admin" && (
+          <>
+            <Metric icon={Users} label="Users" value={users.length.toString()} />
+            <Metric icon={Barcode} label="Barcode batches" value={barcodeBatches.length.toString()} />
+            <Metric icon={Archive} label="Custody events" value={custodyEvents.length.toString()} />
+            <Metric icon={FlaskConical} label="In lab" value={inLab.toString()} />
+          </>
+        )}
+        {role === "Investigator" && (
+          <>
+            <Metric icon={FileText} label="Saved drafts" value={drafts.toString()} />
+            <Metric icon={Signature} label="Ready to transfer" value={readyForTransfer.toString()} />
+            <Metric icon={Archive} label="In transit" value={inTransit.toString()} />
+            <Metric icon={FlaskConical} label="Received by lab" value={inLab.toString()} />
+          </>
+        )}
+        {role === "Laboratory Analyst" && (
+          <>
+            <Metric icon={Archive} label="Incoming evidence" value={inTransit.toString()} />
+            <Metric icon={FlaskConical} label="In lab custody" value={inLab.toString()} />
+            <Metric icon={FileText} label="Closed records" value={closed.toString()} />
+            <Metric icon={Signature} label="Custody events" value={custodyEvents.length.toString()} />
+          </>
+        )}
       </div>
       <Grid columns="xl:grid-cols-[minmax(0,1fr)_320px]">
         <EvidenceTable records={evidence} />
-        <Panel eyebrow="Next action" title={roleActionTitle(role)}>
+        <Panel eyebrow={role === "Investigator" ? "Field queue" : "Next action"} title={role === "Investigator" ? "Current workload" : roleActionTitle(role)}>
           {role === "System Admin" && (
-            <ActionLinks links={[["Manage users", "/admin/users"], ["Generate barcodes", "/admin/barcodes"]]} />
+            <ActionLinks links={[["Manage users", "/admin/users"], ["Generate barcodes", "/admin/barcodes"], ["Evidence lookup", "/admin/lookup"], ["Custody history", "/history"]]} />
           )}
           {role === "Investigator" && (
-            <ActionLinks links={[["Create evidence", "/scan", true], ["Review transfer", "/transfer"]]} />
+            <>
+              <DetailRows rows={[["Saved drafts", drafts.toString()], ["Ready for transfer", readyForTransfer.toString()], ["In transit", inTransit.toString()]]} />
+              <div className="mt-3 border-l-2 border-cyan-500/70 bg-[#07171b] px-3 py-2.5">
+                <p className="label">Priority</p>
+                <p className="mt-1 text-sm font-semibold text-slate-100">{investigatorPriority}</p>
+              </div>
+            </>
           )}
           {role === "Laboratory Analyst" && (
             <ActionLinks links={[["Receive evidence", "/lab"], ["View custody history", "/history"]]} />
           )}
-          <div className="mt-3">
-            <DetailRows rows={[["Incoming transfers", inTransit.toString()], ["Stored evidence", inLab.toString()]]} />
-          </div>
+          {role !== "Investigator" && (
+            <div className="mt-3">
+              <DetailRows rows={[["Incoming transfers", inTransit.toString()], ["Stored evidence", inLab.toString()]]} />
+            </div>
+          )}
         </Panel>
       </Grid>
     </div>
+  );
+}
+
+function InvestigatorWorkflowCommand() {
+  const router = useRouter();
+  const { activeEvidence, evidence, selectEvidence, startNewEvidence, deleteDraftEvidence } = useForenxStore();
+  const selectedEvidence = evidence.find((record) => record.id === activeEvidence.id);
+
+  function continueRecord(record: Evidence) {
+    selectEvidence(record.id);
+    router.push(resumeEvidencePath(record));
+  }
+
+  function selectRecord(record: Evidence) {
+    selectEvidence(record.id);
+  }
+
+  function selectRecordFromKeyboard(event: KeyboardEvent, record: Evidence) {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    selectRecord(record);
+  }
+
+  async function startRecord() {
+    if (await startNewEvidence()) router.push("/scan");
+  }
+
+  return (
+    <section className="workflow-command" aria-label="Evidence workflow command">
+      <div className="flex flex-col gap-2 border-b border-slate-700/80 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-cyan-300">Create evidence</p>
+          <p className="mt-0.5 text-sm font-semibold text-white">Field intake workflow</p>
+        </div>
+        <button className="btn-primary min-h-9 shrink-0" type="button" onClick={startRecord}>
+          Start new record
+        </button>
+      </div>
+      <div className="border-b border-slate-700/80">
+        <div className="flex items-center justify-between gap-3 px-3 py-2.5">
+          <span className="label">Saved records</span>
+          <span className="text-xs font-semibold text-slate-500">{evidence.length} total</span>
+        </div>
+        <div className="workflow-record-table-wrap hidden lg:block">
+          <table className="data-table workflow-record-table">
+            <colgroup>
+              <col className="w-[18%]" />
+              <col className="w-[16%]" />
+              <col className="w-[20%]" />
+              <col className="w-[15%]" />
+              <col className="w-[12%]" />
+              <col className="w-[19%]" />
+            </colgroup>
+            <thead>
+              <tr>
+                <th>Evidence</th>
+                <th>Barcode</th>
+                <th>Case</th>
+                <th>Status</th>
+                <th>Progress</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {evidence.map((record) => {
+                const recordStep = getWorkflowCompletedSteps(record);
+                const pending = record.status === "Draft" || record.status === "Logged";
+                return (
+                  <tr
+                    key={record.id}
+                    className={selectedEvidence?.id === record.id ? "workflow-record-selected" : "workflow-record-row"}
+                    tabIndex={0}
+                    role="button"
+                    aria-pressed={selectedEvidence?.id === record.id}
+                    onClick={() => selectRecord(record)}
+                    onKeyDown={(event) => selectRecordFromKeyboard(event, record)}
+                  >
+                    <td><CellText value={record.id} mono /></td>
+                    <td><CellText value={record.barcode || "Not assigned"} mono /></td>
+                    <td><CellText value={record.caseNumber || "Not entered"} /></td>
+                    <td><Tag label={record.status} tone={record.status === "Draft" ? "slate" : "cyan"} /></td>
+                    <td><span className="text-sm text-slate-300">{recordStep} of 4</span></td>
+                    <td>
+                      <div className="flex flex-wrap gap-2">
+                        <button className="workflow-table-action" type="button" onClick={(event) => { event.stopPropagation(); continueRecord(record); }}>
+                          {pending ? (record.status === "Logged" ? "Transfer" : "Continue") : "View history"}
+                        </button>
+                        {record.status === "Draft" && (
+                          <button className="workflow-table-action workflow-table-delete" type="button" onClick={(event) => { event.stopPropagation(); deleteDraftEvidence(record.id); }}>
+                            Delete
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div className="grid gap-2 px-3 pb-3 lg:hidden">
+          {evidence.map((record) => {
+            const recordStep = getWorkflowCompletedSteps(record);
+            const pending = record.status === "Draft" || record.status === "Logged";
+            const isSelected = selectedEvidence?.id === record.id;
+            return (
+              <article
+                key={record.id}
+                className={`workflow-record-card ${isSelected ? "workflow-record-card-selected" : ""}`}
+                tabIndex={0}
+                role="button"
+                aria-pressed={isSelected}
+                onClick={() => selectRecord(record)}
+                onKeyDown={(event) => selectRecordFromKeyboard(event, record)}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="font-mono text-sm font-semibold text-slate-100">{record.id}</p>
+                    <p className="mt-1 truncate font-mono text-xs text-slate-500">{record.barcode || "No barcode assigned"}</p>
+                  </div>
+                  <Tag label={record.status} tone={record.status === "Draft" ? "slate" : "cyan"} />
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2 border-y border-slate-800 py-2 text-xs">
+                  <span className="text-slate-500">Case <b className="ml-1 font-medium text-slate-300">{record.caseNumber || "Not entered"}</b></span>
+                  <span className="text-right text-slate-500">Progress <b className="ml-1 font-medium text-slate-300">{recordStep} / 4</b></span>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button className="btn-secondary min-h-8" type="button" onClick={(event) => { event.stopPropagation(); continueRecord(record); }}>
+                    {pending ? (record.status === "Logged" ? "Transfer" : "Continue") : "View history"}
+                  </button>
+                  {record.status === "Draft" && (
+                    <button className="min-h-8 border border-rose-900 px-2.5 text-xs font-semibold text-rose-300 hover:border-rose-500 hover:text-rose-100" type="button" onClick={(event) => { event.stopPropagation(); deleteDraftEvidence(record.id); }}>
+                      Delete draft
+                    </button>
+                  )}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -577,7 +840,7 @@ function AdminUsersView() {
 
   return (
     <div className="space-y-3">
-      <PageHeader eyebrow="Admin" title="Account management" text="Review pending requests before granting FORENX access." />
+      <PageHeader eyebrow="Admin" title="Account management" text="Approve and manage accounts." />
       <Panel eyebrow="Pending review" title={`${accessRequests.length} access request${accessRequests.length === 1 ? "" : "s"}`}>
         {accessRequests.length === 0 ? (
           <p className="text-sm text-slate-500">No accounts are waiting for review.</p>
@@ -756,29 +1019,163 @@ function BarcodeView() {
   const [quantity, setQuantity] = useState("12");
   const latest = barcodeBatches[0];
 
+  async function handleGenerate() {
+    if (await generateBarcodeBatch(Number(quantity))) setQuantity("");
+  }
+
   return (
-    <div className="space-y-3">
-      <PageHeader eyebrow="Admin" title="Barcode generation" text="Create printable secure labels for field evidence bags." />
+    <div className="barcode-page space-y-3">
+      <PageHeader eyebrow="Admin" title="Barcode generation" text="Create printable field labels." />
       <Grid columns="xl:grid-cols-[360px_1fr]">
-        <Panel eyebrow="Batch" title="Generate labels">
-          <TextField label="Quantity" value={quantity} onChange={setQuantity} type="number" />
-          <div className="mt-3 flex flex-wrap gap-2">
-            <button className="btn-primary min-h-10 flex-1 whitespace-nowrap" type="button" onClick={() => generateBarcodeBatch(Number(quantity))}>
-              Generate batch
-            </button>
-            <button className="btn-secondary min-h-10 flex-1 gap-2 whitespace-nowrap" type="button" onClick={() => window.print()}>
-              <Printer className="h-4 w-4" /> Print labels
-            </button>
+        <div className="barcode-generator-panel">
+          <Panel eyebrow="Batch" title="Generate labels">
+            <TextField label="Quantity" value={quantity} onChange={setQuantity} type="number" />
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button className="btn-primary min-h-10 flex-1 whitespace-nowrap" type="button" onClick={handleGenerate}>
+                Generate batch
+              </button>
+              <button className="btn-secondary min-h-10 flex-1 gap-2 whitespace-nowrap" type="button" onClick={() => window.print()}>
+                <Printer className="h-4 w-4" /> Print labels
+              </button>
+            </div>
+          </Panel>
+        </div>
+        <section className="barcode-print-sheet">
+          <div className="barcode-sheet-header">
+            <div>
+              <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-cyan-300">FORENX</p>
+              <h3 className="mt-1 text-base font-semibold text-white">Field barcode labels</h3>
+            </div>
+            <p className="text-xs text-slate-500">{latest ? `${latest.barcodes.length} issued labels` : "No batch selected"}</p>
           </div>
-        </Panel>
-        <Panel eyebrow="Print view" title={latest?.id ?? "No batch"}>
-          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          <div className="barcode-label-grid">
             {latest?.barcodes.map((barcode) => (
               <BarcodeLabel key={barcode} barcode={barcode} />
             ))}
           </div>
+        </section>
+      </Grid>
+    </div>
+  );
+}
+
+function AdminEvidenceLookupView() {
+  const { evidence, custodyEvents, barcodeBatches, selectEvidence } = useForenxStore();
+  const [barcode, setBarcode] = useState("");
+  const [result, setResult] = useState<Evidence | null>(null);
+  const [feedback, setFeedback] = useState("");
+  const custodyTrail = result ? custodyEvents.filter((event) => event.evidenceId === result.id) : [];
+
+  function lookupBarcode(value = barcode) {
+    const cleanBarcode = value.trim().toUpperCase();
+    if (!/^FX-\d{6}$/.test(cleanBarcode)) {
+      setResult(null);
+      setFeedback("Enter a label in the FX-000000 format.");
+      return;
+    }
+
+    const record = evidence.find((item) => item.barcode === cleanBarcode);
+    setBarcode(cleanBarcode);
+
+    if (record) {
+      selectEvidence(record.id);
+      setResult(record);
+      setFeedback("");
+      return;
+    }
+
+    const knownLabel = barcodeBatches.some((batch) => batch.barcodes.includes(cleanBarcode));
+    setResult(null);
+    setFeedback(knownLabel ? "This approved label is not assigned to evidence yet." : "No FORENX record matches this barcode.");
+  }
+
+  return (
+    <div className="space-y-3">
+      <PageHeader eyebrow="Admin" title="Evidence lookup" text="Scan a label to review its record." />
+      <Grid columns="xl:grid-cols-[minmax(0,1fr)_360px]">
+        <Panel eyebrow="Lookup" title="Scan or enter barcode">
+          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_260px]">
+            <div className="scan-window">
+              <ScanLine className="h-8 w-8 text-cyan-300" />
+              <p className="mt-2 text-sm font-semibold text-white">Evidence label scanner</p>
+              <p className="mt-1 text-xs text-slate-500">Scan a Code 128 or QR label.</p>
+              <CameraScanner onDetected={lookupBarcode} />
+            </div>
+            <div className="space-y-3">
+              <TextField label="Barcode" value={barcode} onChange={setBarcode} />
+              <p className="-mt-1 text-xs leading-5 text-slate-500">Example: FX-000103</p>
+              <button className="btn-primary w-full" type="button" onClick={() => lookupBarcode()}>
+                Find evidence
+              </button>
+              {feedback && <p className="border border-slate-700 bg-[#091115] px-3 py-2 text-xs leading-5 text-slate-300" role="status">{feedback}</p>}
+            </div>
+          </div>
+        </Panel>
+        <Panel eyebrow="Result" title={result ? result.id : "No record selected"}>
+          {result ? (
+            <DetailRows rows={[["Barcode", result.barcode], ["Status", result.status], ["Case", result.caseNumber || "Not recorded"], ["Custody events", custodyTrail.length.toString()]]} />
+          ) : (
+            <p className="text-sm text-slate-500">Scan an assigned barcode to open its evidence record.</p>
+          )}
         </Panel>
       </Grid>
+
+      {result && (
+        <>
+          <Grid columns="xl:grid-cols-2">
+            <Panel eyebrow="Evidence record" title="Case and item">
+              <DetailRows
+                rows={[
+                  ["Evidence ID", result.id],
+                  ["Offense type", result.offenseType || "Not recorded"],
+                  ["Item category", result.itemCategory || "Not recorded"],
+                  ["Item description", result.itemDescription || "Not recorded"],
+                  ["Destination", result.destinationLab || "Not recorded"]
+                ]}
+              />
+            </Panel>
+            <Panel eyebrow="Recovery" title="Collection details">
+              <DetailRows
+                rows={[
+                  ["Recovered by", result.recoveredBy || "Not recorded"],
+                  ["Recovery time", result.recoveryDateTime || "Not recorded"],
+                  ["GPS", result.gpsCoordinates || "Not recorded"],
+                  ["Specific location", result.locationDetails || "Not recorded"],
+                  ["Capture status", result.spatialCaptureStatus]
+                ]}
+              />
+            </Panel>
+          </Grid>
+          <Grid columns="xl:grid-cols-[minmax(0,1fr)_360px]">
+            <Panel eyebrow="Custody audit" title="Movement history">
+              {custodyTrail.length === 0 ? (
+                <p className="text-sm text-slate-500">No custody events are recorded for this evidence.</p>
+              ) : (
+                <div className="detail-list">
+                  {custodyTrail.map((event) => (
+                    <div key={event.id} className="detail-row">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-100">{event.action}</p>
+                          <p className="mt-1 text-xs text-slate-500">{event.fromUser} to {event.toUser}</p>
+                        </div>
+                        <Tag label={event.status} tone={event.status === "In Lab Custody" ? "green" : "cyan"} />
+                      </div>
+                      <p className="mt-2 text-xs text-slate-400">{event.timestamp} · {event.location}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Panel>
+            <Panel eyebrow="Verification" title="Collection signature">
+              <div className="signature-review"><SignatureCell value={result.investigatorSignature} /></div>
+              <div className="mt-3">
+                <DetailRows rows={[["2D photos", result.photoCaptures.length.toString()], ["3D request", result.threeDCaptureRequested ? "Requested" : "Not requested"], ["Lab signature", result.labSignature ? "Saved" : "Pending"]]} />
+              </div>
+            </Panel>
+          </Grid>
+        </>
+      )}
     </div>
   );
 }
@@ -789,7 +1186,7 @@ function ScanView() {
   const [barcode, setBarcode] = useState(activeEvidence.barcode);
   const [feedback, setFeedback] = useState("");
 
-  function assignCurrentBarcode(value = barcode) {
+  async function assignCurrentBarcode(value = barcode) {
     const cleanBarcode = value.trim().toUpperCase();
 
     if (!/^FX-\d{6}$/.test(cleanBarcode)) {
@@ -797,18 +1194,18 @@ function ScanView() {
       return false;
     }
 
-    if (!assignBarcode(cleanBarcode)) {
+    if (!(await assignBarcode(cleanBarcode))) {
       setFeedback("This label was not assigned. Use an unused barcode from an approved Admin batch.");
       return false;
     }
 
-    setBarcode(cleanBarcode);
-    setFeedback(`${cleanBarcode} assigned to this evidence record.`);
+    setBarcode("");
+    setFeedback("");
     return true;
   }
 
-  function handleAssign() {
-    assignCurrentBarcode();
+  async function handleAssign() {
+    await assignCurrentBarcode();
   }
 
   function handleContinue() {
@@ -819,21 +1216,21 @@ function ScanView() {
     router.push("/capture");
   }
 
-  function handleCameraScan(value: string) {
+  async function handleCameraScan(value: string) {
     setBarcode(value);
-    assignCurrentBarcode(value);
+    await assignCurrentBarcode(value);
   }
 
   return (
     <div className="space-y-3">
-      <PageHeader eyebrow="Step A" title="Barcode assignment" text="Scan or enter the pre-printed FORENX sticker code." />
+      <PageHeader eyebrow="Step A" title="Barcode assignment" text="Scan or enter a label." />
       <Grid columns="xl:grid-cols-[1fr_360px]">
         <Panel eyebrow="Scanner" title="New evidence intake">
           <div className="grid gap-3 md:grid-cols-[1fr_260px]">
             <div className="scan-window">
               <ScanLine className="h-8 w-8 text-cyan-300" />
               <p className="mt-2 text-sm font-semibold text-white">Camera barcode scanner</p>
-              <p className="mt-1 text-xs text-slate-500">Point the camera at a FORENX Code 128 or QR label.</p>
+              <p className="mt-1 text-xs text-slate-500">Scan a Code 128 or QR label.</p>
               <CameraScanner onDetected={handleCameraScan} />
             </div>
             <div className="space-y-3">
@@ -961,13 +1358,13 @@ function CaptureView() {
     setFeedback("Photo removed.");
   }
 
-  function handleContinue() {
-    if (completeSpatialCapture(photos, threeDCaptureRequested)) router.push("/evidence");
+  async function handleContinue() {
+    if (await completeSpatialCapture(photos, threeDCaptureRequested)) router.push("/evidence");
   }
 
   return (
     <div className="space-y-3">
-      <PageHeader eyebrow="Step B" title="2D evidence capture" text="Capture clear photos of the item and its condition before handling or transfer." />
+      <PageHeader eyebrow="Step B" title="2D evidence capture" text="Add item photos." />
       <Grid columns="xl:grid-cols-[1fr_360px]">
         <Panel eyebrow="Required" title="2D evidence photos">
           <input ref={uploadInputRef} className="sr-only" type="file" accept="image/*" multiple onChange={addPhotos} />
@@ -975,7 +1372,7 @@ function CaptureView() {
           <div className="flex flex-col gap-2 border border-slate-800 bg-[#050d17] p-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="text-sm font-semibold text-white">{photos.length} of 6 photos added</p>
-              <p className="mt-1 text-xs leading-5 text-slate-500">Add at least one clear item or condition photo. Image files must be 4 MB or smaller.</p>
+              <p className="mt-1 text-xs leading-5 text-slate-500">Add 1 to 6 photos. Up to 4 MB each.</p>
             </div>
             <div className="flex shrink-0 flex-wrap gap-2">
               <button className="btn-secondary min-h-9" type="button" onClick={() => uploadInputRef.current?.click()}>Upload photos</button>
@@ -1006,7 +1403,7 @@ function CaptureView() {
             <input className="mt-0.5 h-4 w-4 accent-cyan-500" type="checkbox" checked={threeDCaptureRequested} onChange={(event) => setThreeDCaptureRequested(event.target.checked)} />
             <span>
               <span className="block font-semibold text-slate-200">Request 3D capture later</span>
-              <span className="mt-0.5 block text-xs leading-5 text-slate-500">Flag this record for a future 3D scan. This request does not replace the required 2D photos.</span>
+              <span className="mt-0.5 block text-xs leading-5 text-slate-500">Optional. 2D photos stay required.</span>
             </span>
           </label>
           <div className="mt-3 flex flex-wrap gap-2">
@@ -1039,16 +1436,18 @@ function readImageFile(file: File) {
 
 function EvidenceView() {
   const router = useRouter();
-  const { activeEvidence, updateActiveEvidence, saveEvidenceForm } = useForenxStore();
+  const { role, activeEvidence, updateActiveEvidence, saveEvidenceForm } = useForenxStore();
   const [signature, setSignature] = useState("");
 
-  function handleSave() {
-    if (saveEvidenceForm(signature)) router.push("/transfer");
+  async function handleSave() {
+    if (await saveEvidenceForm(signature)) router.push("/transfer");
   }
+
+  if (role === "Laboratory Analyst") return <LaboratoryEvidenceReview />;
 
   return (
     <div className="space-y-3">
-      <PageHeader eyebrow="Step C" title="Chain of custody form" text="Complete legally relevant evidence fields and sign collection." />
+      <PageHeader eyebrow="Step C" title="Chain of custody form" text="Add details and sign." />
       <Grid columns="xl:grid-cols-[1fr_390px]">
         <Panel eyebrow="Evidence form" title={activeEvidence.id}>
           <div className="grid gap-3 md:grid-cols-2">
@@ -1080,19 +1479,111 @@ function EvidenceView() {
   );
 }
 
+function LaboratoryEvidenceReview() {
+  const { evidence, activeEvidence, selectEvidence } = useForenxStore();
+  const reviewableRecords = evidence.filter((record) => ["In Transit", "In Lab Custody", "Closed"].includes(record.status));
+  const selectedRecord = reviewableRecords.find((record) => record.id === activeEvidence.id);
+
+  return (
+    <div className="space-y-3">
+      <PageHeader eyebrow="Laboratory" title="Evidence review" text="Review collection details before custody acceptance." />
+      <Panel eyebrow="Records" title="Available evidence">
+        {reviewableRecords.length === 0 ? (
+          <p className="text-sm text-slate-500">No evidence is available for review.</p>
+        ) : (
+          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+            {reviewableRecords.map((record) => {
+              const selected = selectedRecord?.id === record.id;
+              return (
+                <button
+                  key={record.id}
+                  className={`workflow-record-card text-left ${selected ? "workflow-record-card-selected" : ""}`}
+                  type="button"
+                  onClick={() => selectEvidence(record.id)}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="font-mono text-sm font-semibold text-slate-100">{record.id}</span>
+                    <Tag label={record.status} tone={record.status === "In Transit" ? "cyan" : "green"} />
+                  </div>
+                  <p className="mt-2 truncate font-mono text-xs text-slate-500">{record.barcode}</p>
+                  <p className="mt-1 text-xs text-slate-400">{record.caseNumber || "No case number"}</p>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </Panel>
+
+      {!selectedRecord ? (
+        <Panel eyebrow="Review" title="Select evidence">
+          <p className="text-sm text-slate-500">Select an evidence record above to inspect its collection record.</p>
+        </Panel>
+      ) : (
+        <>
+          <Grid columns="xl:grid-cols-2">
+            <Panel eyebrow="Case and item" title={selectedRecord.id}>
+              <DetailRows
+                rows={[
+                  ["Status", selectedRecord.status],
+                  ["Case number", selectedRecord.caseNumber || "Not recorded"],
+                  ["Offense type", selectedRecord.offenseType || "Not recorded"],
+                  ["Item category", selectedRecord.itemCategory || "Not recorded"],
+                  ["Description", selectedRecord.itemDescription || "Not recorded"]
+                ]}
+              />
+            </Panel>
+            <Panel eyebrow="Recovery" title="Collection details">
+              <DetailRows
+                rows={[
+                  ["Barcode", selectedRecord.barcode],
+                  ["Recovered by", selectedRecord.recoveredBy],
+                  ["Recovery time", selectedRecord.recoveryDateTime || "Not recorded"],
+                  ["GPS", selectedRecord.gpsCoordinates || "Not recorded"],
+                  ["Specific location", selectedRecord.locationDetails || "Not recorded"]
+                ]}
+              />
+            </Panel>
+          </Grid>
+          <Grid columns="xl:grid-cols-[minmax(0,1fr)_360px]">
+            <Panel eyebrow="Evidence capture" title="2D photos">
+              {selectedRecord.photoCaptures.length === 0 ? (
+                <p className="text-sm text-slate-500">No photo preview is stored in this browser session.</p>
+              ) : (
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  {selectedRecord.photoCaptures.map((photo, index) => (
+                    <div key={`${photo.slice(0, 32)}-${index}`} className="relative aspect-[4/3] overflow-hidden border border-slate-700 bg-slate-950">
+                      <Image src={photo} alt={`Evidence photo ${index + 1}`} fill sizes="(max-width: 640px) 45vw, 240px" unoptimized className="object-cover" />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Panel>
+            <Panel eyebrow="Verification" title="Collection signature">
+              <div className="signature-review"><SignatureCell value={selectedRecord.investigatorSignature} /></div>
+              <div className="mt-3">
+                <DetailRows rows={[["3D request", selectedRecord.threeDCaptureRequested ? "Requested" : "Not requested"], ["Lab signature", selectedRecord.labSignature ? "Saved" : "Pending"]]} />
+              </div>
+            </Panel>
+          </Grid>
+        </>
+      )}
+    </div>
+  );
+}
+
 function TransferView() {
   const router = useRouter();
   const { activeEvidence, transferEvidence } = useForenxStore();
   const [destination, setDestination] = useState(activeEvidence.destinationLab);
   const [signature, setSignature] = useState("");
 
-  function handleTransfer() {
-    if (transferEvidence(destination, signature)) router.push("/dashboard");
+  async function handleTransfer() {
+    if (await transferEvidence(destination, signature)) router.push("/dashboard");
   }
 
   return (
     <div className="space-y-3">
-      <PageHeader eyebrow="Step D" title="Transfer custody" text="Select destination lab, sign transfer, and mark evidence In Transit." />
+      <PageHeader eyebrow="Step D" title="Transfer custody" text="Choose a lab and sign." />
       <Grid columns="xl:grid-cols-[1fr_390px]">
         <Panel eyebrow="Transfer record" title={activeEvidence.id}>
           <DetailRows
@@ -1119,20 +1610,33 @@ function TransferView() {
 }
 
 function LabView() {
-  const { evidence, activeEvidence, receiveEvidence, selectEvidence } = useForenxStore();
+  const { evidence, evidenceLoading, activeEvidence, receiveEvidence, closeEvidence, selectEvidence } = useForenxStore();
   const incoming = evidence.filter((item) => item.status === "In Transit");
   const [barcode, setBarcode] = useState("");
   const [signature, setSignature] = useState("");
+  const [signatureKey, setSignatureKey] = useState(0);
 
   function selectIncoming(record: Evidence) {
     selectEvidence(record.id);
     setBarcode(record.barcode);
     setSignature("");
+    setSignatureKey((key) => key + 1);
+  }
+
+  async function handleAcceptCustody() {
+    if (!(await receiveEvidence(barcode, signature))) return;
+    setBarcode("");
+    setSignature("");
+    setSignatureKey((key) => key + 1);
+  }
+
+  async function handleCloseEvidence() {
+    await closeEvidence();
   }
 
   return (
     <div className="space-y-3">
-      <PageHeader eyebrow="Laboratory" title="Receive evidence" text="Verify the physical barcode, review records, and accept custody." />
+      <PageHeader eyebrow="Laboratory" title="Receive evidence" text="Match the label and accept custody." />
       <Grid columns="xl:grid-cols-[1fr_390px]">
         <Panel eyebrow="Incoming" title="In Transit evidence">
           <div className="overflow-x-auto">
@@ -1174,12 +1678,27 @@ function LabView() {
         <Panel eyebrow="Verification" title="Accept custody">
           <DetailRows rows={[["Selected evidence", activeEvidence.id], ["Record status", activeEvidence.status]]} />
           <TextField label="Scan arriving barcode" value={barcode} onChange={setBarcode} />
-          <SignaturePad label="Lab analyst signature" onSave={setSignature} />
-          <button className="btn-primary mt-3 w-full" type="button" onClick={() => receiveEvidence(barcode, signature)}>
+          <SignaturePad key={signatureKey} label="Lab analyst signature" onSave={setSignature} />
+          <button className="btn-primary mt-3 w-full" type="button" onClick={handleAcceptCustody}>
             Accept lab custody
           </button>
         </Panel>
       </Grid>
+      {evidenceLoading && (
+        <p className="border border-slate-800 bg-[#050d17] px-3 py-2 text-xs text-slate-400" role="status">
+          Loading secured evidence files.
+        </p>
+      )}
+      {activeEvidence.status === "In Lab Custody" && (
+        <Panel eyebrow="Laboratory record" title="Complete custody">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <DetailRows rows={[["Evidence ID", activeEvidence.id], ["Status", activeEvidence.status]]} />
+            <button className="btn-secondary shrink-0" type="button" onClick={handleCloseEvidence}>
+              Close evidence
+            </button>
+          </div>
+        </Panel>
+      )}
     </div>
   );
 }
@@ -1193,7 +1712,12 @@ function HistoryView() {
 
   return (
     <div className="space-y-3">
-      <PageHeader eyebrow="History" title="Chain of custody" text="Review evidence collection, transfers, lab receipt, and signatures." />
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+        <PageHeader eyebrow="History" title="Chain of custody" text="Collection, transfer, and lab events." />
+        <button className="btn-secondary shrink-0 gap-2" type="button" onClick={() => exportCustodyPdf(custodyEvents)}>
+          <FileText className="h-4 w-4" /> Export PDF
+        </button>
+      </div>
       <Panel eyebrow="Audit trail" title="Custody events">
         <div className="overflow-x-auto">
           <table className="data-table min-w-[1100px]">
@@ -1238,6 +1762,110 @@ function HistoryView() {
       </Panel>
     </div>
   );
+}
+
+function exportCustodyPdf(events: ReturnType<typeof useForenxStore>["custodyEvents"]) {
+  const pdf = createCustodyPdf(events);
+  const url = URL.createObjectURL(new Blob([pdf], { type: "application/pdf" }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `forenx-custody-${new Date().toISOString().slice(0, 10)}.pdf`;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+function truncatePdfText(value: string, length: number) {
+  const plainText = value.replace(/[\\()]/g, "").replace(/[^\x20-\x7E]/g, " ");
+  return plainText.length > length ? `${plainText.slice(0, length - 3)}...` : plainText;
+}
+
+function pdfText(value: string) {
+  return truncatePdfText(value, 120).replace(/\\/g, "\\\\").replace(/[()]/g, "\\$&");
+}
+
+function createCustodyPdf(events: ReturnType<typeof useForenxStore>["custodyEvents"]) {
+  const eventPages = Array.from(
+    { length: Math.max(1, Math.ceil(events.length / 9)) },
+    (_, index) => events.slice(index * 9, (index + 1) * 9)
+  );
+  const objects: string[] = [
+    "",
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>"
+  ];
+  const pageObjectIds = eventPages.map((_, index) => 5 + index * 2);
+  objects[2] = `<< /Type /Pages /Kids [${pageObjectIds.map((id) => `${id} 0 R`).join(" ")}] /Count ${eventPages.length} >>`;
+
+  eventPages.forEach((pageEvents, index) => {
+    const pageObjectId = 5 + index * 2;
+    const contentObjectId = pageObjectId + 1;
+    const text = (x: number, y: number, size: number, color: string, value: string, font = "F1") =>
+      `BT /${font} ${size} Tf ${color} rg ${x} ${y} Td (${pdfText(value)}) Tj ET`;
+    const rowCommands = pageEvents.flatMap((event, eventIndex) => {
+      const top = 671 - eventIndex * 57;
+      const fill = eventIndex % 2 === 0 ? "0.045 0.075 0.09" : "0.035 0.06 0.072";
+      const status = truncatePdfText(event.status.toUpperCase(), 14);
+      return [
+        `${fill} rg 38 ${top - 49} 519 49 re f`,
+        "0.13 0.29 0.33 RG 0.55 w 38 " + `${top - 49} 519 49 re S`,
+        "0.06 0.8 0.88 rg 38 " + `${top - 49} 2 49 re f`,
+        "0.12 0.25 0.29 RG 0.4 w 123 " + `${top - 49} m 123 ${top} l S`,
+        "0.12 0.25 0.29 RG 0.4 w 248 " + `${top - 49} m 248 ${top} l S`,
+        "0.12 0.25 0.29 RG 0.4 w 393 " + `${top - 49} m 393 ${top} l S`,
+        "0.12 0.25 0.29 RG 0.4 w 487 " + `${top - 49} m 487 ${top} l S`,
+        text(46, top - 18, 9.2, "0.91 0.97 0.98", truncatePdfText(event.evidenceId, 14), "F2"),
+        text(131, top - 18, 8.8, "0.91 0.97 0.98", truncatePdfText(event.action, 21), "F2"),
+        text(131, top - 34, 7.4, "0.5 0.67 0.71", `AT  ${truncatePdfText(event.location, 20)}`),
+        text(256, top - 17, 7.2, "0.5 0.67 0.71", `FROM  ${truncatePdfText(event.fromUser, 16)}`),
+        text(256, top - 33, 7.2, "0.5 0.67 0.71", `TO  ${truncatePdfText(event.toUser, 18)}`),
+        text(401, top - 18, 7.4, "0.69 0.81 0.83", truncatePdfText(event.timestamp, 18)),
+        text(495, top - 24, 6.8, "0.06 0.8 0.88", status, "F2")
+      ];
+    }).join("\n");
+    const stream = [
+      "0.025 0.04 0.05 rg 0 0 595 842 re f",
+      "0.06 0.8 0.88 rg 38 756 4 54 re f",
+      "0.06 0.8 0.88 RG 0.8 w 38 810 m 154 810 l S",
+      "0.06 0.8 0.88 RG 0.8 w 444 810 m 557 810 l S",
+      text(52, 787, 24, "0.94 0.98 0.99", "FORENX", "F2"),
+      text(52, 768, 8.5, "0.06 0.8 0.88", "DIGITAL CHAIN OF CUSTODY"),
+      text(444, 786, 8, "0.5 0.67 0.71", "CUSTODY LEDGER", "F2"),
+      text(444, 770, 7.2, "0.5 0.67 0.71", `PAGE ${index + 1} / ${eventPages.length}`),
+      "0.1 0.22 0.26 RG 0.6 w 38 738 m 557 738 l S",
+      text(38, 718, 10, "0.06 0.8 0.88", "CHAIN OF CUSTODY EVENTS", "F2"),
+      text(430, 718, 7.2, "0.5 0.67 0.71", `${events.length} TOTAL EVENTS`),
+      "0.07 0.16 0.19 rg 38 686 519 22 re f",
+      "0.06 0.8 0.88 RG 0.55 w 38 686 519 22 re S",
+      text(46, 694, 7, "0.55 0.7 0.74", "EVIDENCE", "F2"),
+      text(131, 694, 7, "0.55 0.7 0.74", "EVENT / LOCATION", "F2"),
+      text(256, 694, 7, "0.55 0.7 0.74", "CUSTODY", "F2"),
+      text(401, 694, 7, "0.55 0.7 0.74", "RECORDED", "F2"),
+      text(495, 694, 7, "0.55 0.7 0.74", "STATUS", "F2"),
+      rowCommands,
+      "0.1 0.22 0.26 RG 0.6 w 38 42 m 557 42 l S",
+      text(38, 27, 7.5, "0.42 0.56 0.6", `Generated ${new Date().toLocaleString()}`),
+      text(442, 27, 7.5, "0.42 0.56 0.6", "FORENX EVIDENCE TRACKING")
+    ].join("\n");
+    objects[pageObjectId] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${contentObjectId} 0 R >>`;
+    objects[contentObjectId] = `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`;
+  });
+
+  const encoder = new TextEncoder();
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+  for (let index = 1; index < objects.length; index += 1) {
+    offsets[index] = encoder.encode(pdf).length;
+    pdf += `${index} 0 obj\n${objects[index]}\nendobj\n`;
+  }
+  const xrefOffset = encoder.encode(pdf).length;
+  pdf += `xref\n0 ${objects.length}\n0000000000 65535 f \n`;
+  for (let index = 1; index < objects.length; index += 1) {
+    pdf += `${String(offsets[index]).padStart(10, "0")} 00000 n \n`;
+  }
+  pdf += `trailer\n<< /Size ${objects.length} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+  return pdf;
 }
 
 function SettingsView() {
@@ -1285,7 +1913,7 @@ function SettingsView() {
             rows={[
               ["Account status", currentUser.status],
               ["Session", "Active"],
-              ["Workspace mode", authMode === "Demo" ? "Demo workspace" : "Secure account"]
+              ["Account type", authMode === "Demo" ? "Local development" : "Secure account"]
             ]}
           />
           <div className="mt-3 flex flex-wrap gap-2">
@@ -1308,11 +1936,11 @@ function settingsWorkspace(role: Role) {
   if (role === "System Admin") {
     return {
       title: "Administrative controls",
-      description: "Review account access, label issuance, and system records.",
+      description: "Accounts, labels, and records.",
       items: [
-        { icon: Users, label: "Account approvals", value: "Manage requests and account access", href: "/admin/users" },
-        { icon: QrCode, label: "Barcode batches", value: "Generate and print field labels", href: "/admin/barcodes" },
-        { icon: Archive, label: "Custody review", value: "Review evidence movement records", href: "/history" }
+        { icon: Users, label: "Account approvals", value: "Requests and access", href: "/admin/users" },
+        { icon: QrCode, label: "Barcode batches", value: "Print field labels", href: "/admin/barcodes" },
+        { icon: Archive, label: "Custody review", value: "Movement records", href: "/history" }
       ]
     };
   }
@@ -1320,22 +1948,22 @@ function settingsWorkspace(role: Role) {
   if (role === "Laboratory Analyst") {
     return {
       title: "Laboratory workflow",
-      description: "Review incoming evidence and manage laboratory custody steps.",
+      description: "Incoming transfers and custody.",
       items: [
-        { icon: FlaskConical, label: "Incoming evidence", value: "Review transfers awaiting acceptance", href: "/lab" },
-        { icon: Barcode, label: "Barcode verification", value: "Match physical labels with custody records", href: "/lab" },
-        { icon: Archive, label: "Custody history", value: "Review signed movement records", href: "/history" }
+        { icon: FlaskConical, label: "Incoming evidence", value: "Transfers waiting", href: "/lab" },
+        { icon: Barcode, label: "Barcode verification", value: "Match labels to records", href: "/lab" },
+        { icon: Archive, label: "Custody history", value: "Signed records", href: "/history" }
       ]
     };
   }
 
   return {
     title: "Field workflow",
-    description: "Review field capture access, evidence logging, and transfer controls.",
+    description: "Capture, records, and transfers.",
     items: [
-      { icon: ScanLine, label: "Evidence scanning", value: "Open barcode assignment", href: "/scan" },
-      { icon: Box, label: "Scene capture", value: "Review spatial capture status", href: "/capture" },
-      { icon: Signature, label: "Custody transfer", value: "Review transfer signing workflow", href: "/transfer" }
+      { icon: ScanLine, label: "Evidence scanning", value: "Barcode assignment", href: "/scan" },
+      { icon: Box, label: "Scene capture", value: "Photo status", href: "/capture" },
+      { icon: Signature, label: "Custody transfer", value: "Transfer status", href: "/transfer" }
     ]
   };
 }
@@ -1404,7 +2032,7 @@ function SettingsReadinessRow({ label, value, tone }: { label: string; value: st
 
 function PageHeader({ eyebrow, title, text }: { eyebrow: string; title: string; text: string }) {
   return (
-    <header className="min-w-0 border border-slate-800 bg-[#07131f] px-4 py-3">
+    <header className="page-intro">
       <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-cyan-300">{eyebrow}</p>
       <h2 className="mt-1 text-xl font-semibold leading-tight text-white sm:text-2xl">{title}</h2>
       <p className="mt-1 text-sm text-slate-400">{text}</p>
@@ -1422,12 +2050,12 @@ function Panel({
   children: ReactNode;
 }) {
   return (
-    <section className="min-w-0 border border-slate-800 bg-[#07131f]">
-      <div className="border-b border-slate-800 bg-[#081827] px-4 py-2.5">
+    <section className="module-panel">
+      <div className="module-header">
         <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-cyan-300">{eyebrow}</p>
         <h3 className="mt-1 truncate text-base font-semibold text-white">{title}</h3>
       </div>
-      <div className="min-w-0 p-4">{children}</div>
+      <div className="module-body">{children}</div>
     </section>
   );
 }
@@ -1446,7 +2074,7 @@ function Metric({
   value: string;
 }) {
   return (
-    <div className="flex min-w-0 items-center gap-3 border border-slate-800 bg-[#07131f] px-4 py-3">
+    <div className="metric-card">
       <Icon className="h-5 w-5 shrink-0 text-cyan-300" />
       <div className="min-w-0">
         <p className="text-xl font-semibold text-white">{value}</p>
@@ -1555,7 +2183,7 @@ function SignatureCell({ value }: { value: string }) {
     return <span className="text-slate-500">Pending</span>;
   }
 
-  const saved = value.startsWith("data:image");
+  const saved = value.startsWith("data:image/") || /^https?:\/\//.test(value);
 
   if (saved) {
     return (
@@ -1579,9 +2207,9 @@ function SignatureCell({ value }: { value: string }) {
 
 function DetailRows({ rows }: { rows: [string, string][] }) {
   return (
-    <div className="divide-y divide-slate-800 border border-slate-800">
+    <div className="detail-list">
       {rows.map(([label, value]) => (
-        <div key={label} className="grid gap-1 bg-[#050d17] px-3 py-2 text-sm sm:grid-cols-[140px_1fr]">
+        <div key={label} className="detail-row text-sm sm:grid-cols-[140px_1fr]">
           <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</span>
           <span className="min-w-0 break-words text-slate-200">{value}</span>
         </div>
@@ -1634,23 +2262,6 @@ function SelectField({
   );
 }
 
-function RolePicker({ value, onChange }: { value: Role; onChange: (role: Role) => void }) {
-  return (
-    <div className="mt-3 grid gap-2 sm:grid-cols-3">
-      {allRoles.map((role) => (
-        <button
-          key={role}
-          type="button"
-          onClick={() => onChange(role)}
-          className={value === role ? "role-card border-cyanline text-white" : "role-card border-slate-800 text-slate-400"}
-        >
-          {role}
-        </button>
-      ))}
-    </div>
-  );
-}
-
 function SignaturePad({
   label,
   onSave
@@ -1668,7 +2279,7 @@ function SignaturePad({
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
-    ctx.fillStyle = "#f8fafc";
+    ctx.fillStyle = "#091419";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   }
 
@@ -1699,7 +2310,7 @@ function SignaturePad({
     ctx.lineWidth = 2.4;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
-    ctx.strokeStyle = "#0f172a";
+    ctx.strokeStyle = "#e8fbff";
     ctx.beginPath();
     ctx.moveTo(p.x, p.y);
     ctx.lineTo(p.x + 0.1, p.y + 0.1);
@@ -1716,7 +2327,7 @@ function SignaturePad({
     ctx.lineWidth = 2.4;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
-    ctx.strokeStyle = "#0f172a";
+    ctx.strokeStyle = "#e8fbff";
     ctx.lineTo(p.x, p.y);
     ctx.stroke();
   }
@@ -1756,7 +2367,7 @@ function SignaturePad({
         ref={canvasRef}
         width={640}
         height={180}
-        className="mt-1 h-36 w-full touch-none border border-slate-700 bg-slate-100"
+        className="signature-pad mt-1 h-36 w-full touch-none"
         onPointerDown={start}
         onPointerMove={move}
         onPointerUp={stop}
@@ -1797,40 +2408,49 @@ function BarcodeLabel({ barcode }: { barcode: string }) {
   }, [barcode]);
 
   return (
-    <div className="border border-slate-700 bg-slate-100 p-3 text-center text-slate-950">
-      <p className="text-sm font-black tracking-wide">FORENX EVIDENCE</p>
-      <svg ref={barcodeRef} aria-label={`Code 128 barcode for ${barcode}`} className="mx-auto mt-2 h-14 w-full max-w-60" role="img" />
-      <p className="mt-2 font-mono text-xs font-bold">{barcode}</p>
+    <div className="barcode-label border border-slate-700 bg-slate-100 p-3 text-slate-950">
+      <div className="flex items-center justify-between border-b border-slate-300 pb-1.5">
+        <p className="text-xs font-black tracking-[0.12em]">FORENX</p>
+        <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-slate-500">Evidence label</p>
+      </div>
+      <svg ref={barcodeRef} aria-label={`Code 128 barcode for ${barcode}`} className="mx-auto my-3 h-14 w-full max-w-60" role="img" />
+      <div className="flex items-end justify-between gap-2 border-t border-slate-300 pt-1.5">
+        <p className="font-mono text-xs font-black tracking-wide">{barcode}</p>
+        <p className="text-[8px] font-bold uppercase tracking-[0.08em] text-slate-500">Secure ID</p>
+      </div>
     </div>
   );
 }
 
 function Tag({ label, tone = "slate" }: { label: string; tone?: "slate" | "cyan" | "green" }) {
   const toneClass = {
-    slate: "border-slate-700 bg-slate-900 text-slate-300",
-    cyan: "border-cyan-800 bg-cyan-950 text-cyan-200",
-    green: "border-emerald-800 bg-emerald-950 text-emerald-200"
+    slate: "status-slate",
+    cyan: "status-cyan",
+    green: "status-green"
   }[tone];
 
-  return <span className={`inline-flex w-fit border px-2 py-1 text-[11px] font-semibold uppercase tracking-wide ${toneClass}`}>{label}</span>;
+  return <span className={`status-flag ${toneClass}`}>{label}</span>;
 }
 
 function ActionLinks({ links }: { links: [string, string, boolean?][] }) {
   const { startNewEvidence } = useForenxStore();
+  const router = useRouter();
 
   return (
     <div className="grid gap-2">
-      {links.map(([label, href, startsWorkflow]) => (
-        <Link
+      {links.map(([label, href, startsWorkflow]) => startsWorkflow ? (
+        <button
           key={href}
           className="btn-primary"
-          href={href}
-          onClick={() => {
-            if (startsWorkflow) startNewEvidence();
+          type="button"
+          onClick={async () => {
+            if (await startNewEvidence()) router.push(href);
           }}
         >
           {label}
-        </Link>
+        </button>
+      ) : (
+        <Link key={href} className="btn-primary" href={href}>{label}</Link>
       ))}
     </div>
   );

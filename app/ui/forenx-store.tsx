@@ -6,18 +6,22 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useReducer,
   useRef,
   useState
 } from "react";
 import type { ReactNode } from "react";
-import {
-  barcodeBatches as initialBarcodeBatches,
-  custodyEvents as initialCustodyEvents,
-  emptyEvidence,
-  evidenceRecords as initialEvidenceRecords,
-  users as initialUsers
-} from "@/lib/mock-data";
+import { emptyEvidence, users as initialUsers } from "@/lib/mock-data";
 import { supabase, supabaseReady } from "@/lib/supabase";
+import {
+  accessRequestSchema,
+  barcodeQuantitySchema,
+  barcodeSchema,
+  evidenceFormSchema,
+  signInSchema,
+  signatureDataSchema,
+  supportRequestSchema
+} from "@/lib/validation";
 import type { AccessRequest, BarcodeBatch, CustodyEvent, Evidence, Role, SupportRequest, User } from "@/lib/types";
 
 type Store = {
@@ -30,12 +34,14 @@ type Store = {
   accessRequests: AccessRequest[];
   supportRequests: SupportRequest[];
   evidence: Evidence[];
+  evidenceLoading: boolean;
   activeEvidence: Evidence;
   barcodeBatches: BarcodeBatch[];
   custodyEvents: CustodyEvent[];
   message: string;
+  messageVersion: number;
+  dismissedMessageVersion: number;
   backendMode: string;
-  signIn: (role: Role, email: string) => boolean;
   signInWithPassword: (email: string, password: string) => Promise<boolean>;
   signUpForAccess: (request: {
     fullName: string;
@@ -46,7 +52,6 @@ type Store = {
     agency: string;
   }) => Promise<boolean>;
   signOut: () => void;
-  setRole: (role: Role) => void;
   addUser: (user: Omit<User, "id" | "status">) => void;
   setUserStatus: (id: string, status: User["status"]) => Promise<void>;
   resetPassword: (id: string) => Promise<void>;
@@ -64,21 +69,22 @@ type Store = {
   resolveSupportRequest: (id: string) => Promise<void>;
   loadCustodyHistory: () => Promise<void>;
   refreshSession: () => Promise<boolean>;
-  generateBarcodeBatch: (quantity: number) => boolean;
-  startNewEvidence: () => boolean;
-  assignBarcode: (barcode: string) => boolean;
-  completeSpatialCapture: (photoCaptures: string[], threeDCaptureRequested: boolean) => boolean;
+  generateBarcodeBatch: (quantity: number) => Promise<boolean>;
+  startNewEvidence: () => Promise<boolean>;
+  assignBarcode: (barcode: string) => Promise<boolean>;
+  completeSpatialCapture: (photoCaptures: string[], threeDCaptureRequested: boolean) => Promise<boolean>;
   updateActiveEvidence: (field: keyof Evidence, value: string) => void;
-  saveEvidenceForm: (signature: string) => boolean;
-  transferEvidence: (destinationLab: string, signature: string) => boolean;
-  receiveEvidence: (barcode: string, signature: string) => boolean;
+  saveEvidenceForm: (signature: string) => Promise<boolean>;
+  transferEvidence: (destinationLab: string, signature: string) => Promise<boolean>;
+  receiveEvidence: (barcode: string, signature: string) => Promise<boolean>;
+  closeEvidence: () => Promise<boolean>;
   selectEvidence: (id: string) => void;
+  deleteDraftEvidence: (id: string) => Promise<void>;
+  dismissMessage: () => void;
   resetDemo: () => void;
 };
 
 const StoreContext = createContext<Store | null>(null);
-const storageKey = "forenx-website-demo";
-
 function nowLabel() {
   return new Intl.DateTimeFormat("en", {
     month: "long",
@@ -93,24 +99,17 @@ function makeId(prefix: string) {
   return `${prefix}-${Date.now().toString().slice(-6)}`;
 }
 
-function userForRole(users: User[], role: Role) {
-  return users.find((user) => user.role === role) ?? users[0];
+function isStoragePath(value: string) {
+  return value.startsWith("signatures/") || value.startsWith("evidence/");
 }
 
-function custodyFeedRecord(event: CustodyEvent, createdBy: string) {
-  return {
-    id: event.id,
-    evidence_id: event.evidenceId,
-    action: event.action,
-    from_user_name: event.fromUser,
-    to_user_name: event.toUser,
-    actor_role: event.role,
-    event_time: event.timestamp,
-    location: event.location,
-    signature_data: event.signatureImage,
-    status: event.status,
-    created_by: createdBy
-  };
+function userForRole(users: User[], role: Role) {
+  return (
+    users.find((user) => user.role === role) ??
+    users[0] ??
+    initialUsers.find((user) => user.role === role) ??
+    initialUsers[0]
+  );
 }
 
 function custodyEventFromFeed(record: {
@@ -134,72 +133,327 @@ function custodyEventFromFeed(record: {
     role: record.actor_role as Role,
     timestamp: record.event_time,
     location: record.location,
-    signatureImage: record.signature_data,
+    signatureImage: isStoragePath(record.signature_data) ? "" : record.signature_data,
+    signaturePath: isStoragePath(record.signature_data) ? record.signature_data : undefined,
     status: record.status as CustodyEvent["status"]
+  };
+}
+
+type EvidenceRow = {
+  id: string;
+  barcode: string | null;
+  case_number: string | null;
+  offense_type: string | null;
+  item_category: string | null;
+  item_description: string | null;
+  recovery_at: string | null;
+  gps_coordinates: string | null;
+  location_details: string | null;
+  recovered_by: string;
+  recovered_by_name: string | null;
+  investigator_signature_path: string | null;
+  lab_signature_path: string | null;
+  three_d_capture_requested: boolean | null;
+  spatial_capture_status: Evidence["spatialCaptureStatus"];
+  spatial_capture_note: string | null;
+  status: Evidence["status"];
+  destination_lab: string | null;
+};
+
+function displayDate(value: string | null) {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat("en", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  }).format(date);
+}
+
+function databaseDate(value: string) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
+}
+
+function evidenceFromRow(row: EvidenceRow): Evidence {
+  return {
+    id: row.id,
+    barcode: row.barcode ?? "",
+    caseNumber: row.case_number ?? "",
+    offenseType: row.offense_type ?? "",
+    itemCategory: row.item_category ?? "",
+    itemDescription: row.item_description ?? "",
+    recoveryDateTime: displayDate(row.recovery_at),
+    gpsCoordinates: row.gps_coordinates ?? "",
+    locationDetails: row.location_details ?? "",
+    recoveredBy: row.recovered_by_name ?? "Assigned investigator",
+    recoveredById: row.recovered_by,
+    investigatorSignature: "",
+    investigatorSignaturePath: row.investigator_signature_path ?? undefined,
+    labSignature: "",
+    labSignaturePath: row.lab_signature_path ?? undefined,
+    photoCaptures: [],
+    threeDCaptureRequested: Boolean(row.three_d_capture_requested),
+    spatialCaptureStatus: row.spatial_capture_status ?? "Not Started",
+    spatialCapturePreview: row.spatial_capture_note ?? "No 2D evidence photos captured",
+    status: row.status,
+    destinationLab: row.destination_lab ?? ""
   };
 }
 
 export function ForenxStoreProvider({ children }: { children: ReactNode }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authReady, setAuthReady] = useState(!supabaseReady);
-  const [authMode, setAuthMode] = useState<"Demo" | "Supabase">("Demo");
+  const [authMode, setAuthMode] = useState<"Demo" | "Supabase">("Supabase");
   const [sessionUser, setSessionUser] = useState<User | null>(null);
-  const [users, setUsers] = useState<User[]>(initialUsers);
+  const [users, setUsers] = useState<User[]>([]);
   const [accessRequests, setAccessRequests] = useState<AccessRequest[]>([]);
   const [supportRequests, setSupportRequests] = useState<SupportRequest[]>([]);
   const [role, setRole] = useState<Role>("Investigator");
-  const [evidence, setEvidence] = useState<Evidence[]>(initialEvidenceRecords);
-  const [activeEvidence, setActiveEvidence] = useState<Evidence>(initialEvidenceRecords[0]);
-  const [barcodeBatches, setBarcodeBatches] = useState<BarcodeBatch[]>(initialBarcodeBatches);
-  const [custodyEvents, setCustodyEvents] = useState<CustodyEvent[]>(initialCustodyEvents);
-  const custodyEventsRef = useRef<CustodyEvent[]>(initialCustodyEvents);
+  const [evidence, setEvidence] = useState<Evidence[]>([]);
+  const [evidenceLoading, setEvidenceLoading] = useState(false);
+  const [activeEvidence, setActiveEvidence] = useState<Evidence>(emptyEvidence);
+  const [barcodeBatches, setBarcodeBatches] = useState<BarcodeBatch[]>([]);
+  const [custodyEvents, setCustodyEvents] = useState<CustodyEvent[]>([]);
   const sharedHistoryLoadedAtRef = useRef(0);
-  const [message, setMessage] = useState("Demo workspace loaded.");
-
-  useEffect(() => {
-    window.setTimeout(() => {
-      const rawState = window.localStorage.getItem(storageKey);
-
-      if (!rawState) {
-        return;
+  const sharedEvidenceLoadedForRef = useRef("");
+  const [messageState, setMessage] = useReducer(
+    (
+      state: { message: string; version: number; dismissedVersion: number },
+      action: string | { type: "dismiss" }
+    ) => {
+      if (typeof action === "string") {
+        return { message: action, version: state.version + 1, dismissedVersion: -1 };
       }
 
-      try {
-        const state = JSON.parse(rawState) as {
-          isAuthenticated?: boolean;
-          users?: User[];
-          role?: Role;
-          evidence?: Evidence[];
-          activeEvidence?: Evidence;
-          barcodeBatches?: BarcodeBatch[];
-          custodyEvents?: CustodyEvent[];
-        };
-
-        if (state.users) setUsers(state.users);
-        if (state.role) setRole(state.role);
-        if (state.evidence) setEvidence(state.evidence);
-        if (state.activeEvidence) setActiveEvidence(state.activeEvidence);
-        if (state.barcodeBatches) setBarcodeBatches(state.barcodeBatches);
-        if (state.custodyEvents) setCustodyEvents(state.custodyEvents);
-      } catch {
-        setMessage("Demo data reset after a local storage read error.");
-      }
-    }, 0);
-  }, []);
-
-  useEffect(() => {
-    window.localStorage.setItem(
-      storageKey,
-      JSON.stringify({ isAuthenticated, users, role, evidence, activeEvidence, barcodeBatches, custodyEvents })
-    );
-  }, [activeEvidence, barcodeBatches, custodyEvents, evidence, isAuthenticated, role, users]);
-
-  useEffect(() => {
-    custodyEventsRef.current = custodyEvents;
-  }, [custodyEvents]);
+      return { ...state, dismissedVersion: state.version };
+    },
+    { message: "Session ready.", version: 0, dismissedVersion: 0 }
+  );
+  const { message, version: messageVersion, dismissedVersion: dismissedMessageVersion } = messageState;
+  const dismissMessage = useCallback(() => setMessage({ type: "dismiss" }), []);
 
   const roleUser = useMemo(() => userForRole(users, role), [role, users]);
   const currentUser = sessionUser ?? roleUser;
+
+  const getSignedAssetUrls = useCallback(async (paths: string[]) => {
+    if (!supabase || paths.length === 0) return new Map<string, string>();
+    const client = supabase;
+    const uniquePaths = [...new Set(paths.filter(Boolean))];
+    const groups = {
+      signatures: uniquePaths.filter((path) => path.startsWith("signatures/")),
+      evidence: uniquePaths.filter((path) => path.startsWith("evidence/"))
+    };
+    const urlMap = new Map<string, string>();
+
+    const addUrls = async (bucket: "forenx-signatures" | "forenx-evidence-media", group: string[]) => {
+      if (group.length === 0) return;
+      const { data } = await client.storage.from(bucket).createSignedUrls(group, 3600);
+      for (const item of data ?? []) {
+        if (item.path && item.signedUrl) urlMap.set(item.path, item.signedUrl);
+      }
+    };
+
+    await Promise.all([
+      addUrls("forenx-signatures", groups.signatures),
+      addUrls("forenx-evidence-media", groups.evidence)
+    ]);
+    return urlMap;
+  }, []);
+
+  const uploadSignatureAsset = useCallback(async (evidenceId: string, label: string, signature: string) => {
+    if (!signature.startsWith("data:image/") || authMode !== "Supabase" || !supabase || !sessionUser) {
+      return { preview: signature, path: undefined as string | undefined };
+    }
+
+    try {
+      const blob = await fetch(signature).then((response) => response.blob());
+      const path = `signatures/${sessionUser.id}/${evidenceId}/${label}-${Date.now()}.png`;
+      const { error } = await supabase.storage
+        .from("forenx-signatures")
+        .upload(path, blob, { contentType: "image/png", upsert: false });
+      if (error) throw error;
+
+      const { data } = await supabase.storage.from("forenx-signatures").createSignedUrl(path, 3600);
+      return { preview: data?.signedUrl ?? signature, path };
+    } catch {
+      setMessage("Signature upload failed. Draw and save the signature again.");
+      return null;
+    }
+  }, [authMode, sessionUser]);
+
+  const uploadEvidencePhotos = useCallback(async (record: Evidence, photos: string[]) => {
+    if (authMode !== "Supabase" || !supabase || !sessionUser) return true;
+    const sourcePhotos = photos.filter((photo) => photo.startsWith("data:image/"));
+    if (sourcePhotos.length === 0) return true;
+
+    const uploadedPaths: string[] = [];
+    try {
+      for (const [index, photo] of sourcePhotos.entries()) {
+        const blob = await fetch(photo).then((response) => response.blob());
+        const extension = blob.type === "image/png" ? "png" : blob.type === "image/webp" ? "webp" : "jpg";
+        const path = `evidence/${sessionUser.id}/${record.id}/photo-${Date.now()}-${index + 1}.${extension}`;
+        const { error } = await supabase.storage
+          .from("forenx-evidence-media")
+          .upload(path, blob, { contentType: blob.type || "image/jpeg", upsert: false });
+        if (error) throw error;
+        uploadedPaths.push(path);
+      }
+
+      const { error: mediaError } = await supabase.from("evidence_media").insert(
+        uploadedPaths.map((storage_path) => ({
+          evidence_id: record.id,
+          uploaded_by: sessionUser.id,
+          media_type: "Photo",
+          storage_path
+        }))
+      );
+      if (mediaError) throw mediaError;
+      return true;
+    } catch {
+      if (uploadedPaths.length > 0) void supabase.storage.from("forenx-evidence-media").remove(uploadedPaths);
+      setMessage("Photo upload failed. Keep this page open and try again.");
+      return false;
+    }
+  }, [authMode, sessionUser]);
+
+  const persistEvidenceRecord = useCallback(async (record: Evidence, mode: "create" | "update" = "update") => {
+    if (authMode !== "Supabase" || !supabase || !sessionUser) return true;
+
+    const payload = {
+      id: record.id,
+      barcode: record.barcode || null,
+      case_number: record.caseNumber || null,
+      offense_type: record.offenseType || null,
+      item_category: record.itemCategory || null,
+      item_description: record.itemDescription || null,
+      recovery_at: databaseDate(record.recoveryDateTime),
+      gps_coordinates: record.gpsCoordinates || null,
+      location_details: record.locationDetails || null,
+      recovered_by: record.recoveredById ?? sessionUser.id,
+      recovered_by_name: record.recoveredBy || currentUser.name,
+      investigator_signature_path: record.investigatorSignaturePath ?? null,
+      lab_signature_path: record.labSignaturePath ?? null,
+      three_d_capture_requested: record.threeDCaptureRequested,
+      spatial_capture_status: record.spatialCaptureStatus,
+      spatial_capture_note: record.spatialCapturePreview || null,
+      status: record.status,
+      destination_lab: record.destinationLab || null
+    };
+
+    const result = mode === "create"
+      ? await supabase.from("evidence").insert(payload)
+      : await supabase.from("evidence").update(payload).eq("id", record.id).select("id").maybeSingle();
+
+    const { error } = result;
+
+    if (error) {
+      setMessage(`Evidence sync failed: ${error.message}`);
+      return false;
+    }
+
+    if (mode === "update" && !("data" in result && result.data)) {
+      setMessage("Evidence sync failed: the record no longer exists in the database.");
+      return false;
+    }
+
+    return true;
+  }, [authMode, currentUser.name, sessionUser]);
+
+  const loadSharedEvidence = useCallback(async () => {
+    if (authMode !== "Supabase" || !supabase || !sessionUser) return;
+    const loadKey = `${sessionUser.id}:${role}`;
+    if (sharedEvidenceLoadedForRef.current === loadKey) return;
+    setEvidenceLoading(true);
+
+    const { data: evidenceRows, error: evidenceError } = await supabase
+      .from("evidence")
+      .select("id, barcode, case_number, offense_type, item_category, item_description, recovery_at, gps_coordinates, location_details, recovered_by, recovered_by_name, investigator_signature_path, lab_signature_path, three_d_capture_requested, spatial_capture_status, spatial_capture_note, status, destination_lab")
+      .order("updated_at", { ascending: false });
+
+    if (evidenceError) {
+      setMessage("Evidence database setup is incomplete. Run enable-production-evidence-flow.sql.");
+      setEvidenceLoading(false);
+      return;
+    }
+
+    const { data: barcodeRows, error: barcodeError } = await supabase
+      .from("barcodes")
+      .select("batch_id, value")
+      .order("value", { ascending: true });
+
+    if (barcodeError) {
+      setMessage("Barcode labels could not be loaded from the database.");
+      setEvidenceLoading(false);
+      return;
+    }
+
+    const mappedEvidence = (evidenceRows ?? []).map((row) => evidenceFromRow(row as EvidenceRow));
+    const evidenceIds = mappedEvidence.map((record) => record.id);
+    const { data: mediaRows } = evidenceIds.length > 0
+      ? await supabase
+        .from("evidence_media")
+        .select("evidence_id, storage_path")
+        .eq("media_type", "Photo")
+        .in("evidence_id", evidenceIds)
+      : { data: [] as { evidence_id: string; storage_path: string }[] };
+    const signedUrls = await getSignedAssetUrls([
+      ...mappedEvidence.flatMap((record) => [record.investigatorSignaturePath ?? "", record.labSignaturePath ?? ""]),
+      ...(mediaRows ?? []).map((media) => media.storage_path)
+    ]);
+    const hydratedEvidence = mappedEvidence.map((record) => ({
+      ...record,
+      investigatorSignature: record.investigatorSignaturePath ? signedUrls.get(record.investigatorSignaturePath) ?? "Signature stored" : "",
+      labSignature: record.labSignaturePath ? signedUrls.get(record.labSignaturePath) ?? "Signature stored" : "",
+      photoCaptures: (mediaRows ?? [])
+        .filter((media) => media.evidence_id === record.id)
+        .map((media) => signedUrls.get(media.storage_path))
+        .filter((url): url is string => Boolean(url))
+    }));
+    setEvidence(hydratedEvidence);
+
+    if (role === "System Admin") {
+      const { data: batchRows, error: batchError } = await supabase
+        .from("barcode_batches")
+        .select("id, quantity, barcode_prefix, created_at, created_by")
+        .order("created_at", { ascending: false });
+
+      if (!batchError) {
+        setBarcodeBatches((batchRows ?? []).map((batch) => ({
+          id: batch.id,
+          createdBy: "System Admin",
+          quantity: batch.quantity,
+          barcodePrefix: batch.barcode_prefix,
+          createdAt: displayDate(batch.created_at),
+          barcodes: (barcodeRows ?? []).filter((barcode) => barcode.batch_id === batch.id).map((barcode) => barcode.value)
+        })));
+      }
+    } else {
+      setBarcodeBatches([
+        {
+          id: "issued-labels",
+          createdBy: "System Admin",
+          quantity: (barcodeRows ?? []).length,
+          barcodePrefix: "FX",
+          createdAt: "",
+          barcodes: (barcodeRows ?? []).map((barcode) => barcode.value)
+        }
+      ]);
+    }
+
+    sharedEvidenceLoadedForRef.current = loadKey;
+    setEvidenceLoading(false);
+  }, [authMode, getSignedAssetUrls, role, sessionUser]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadSharedEvidence();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loadSharedEvidence]);
 
   const loadSupabaseProfile = useCallback(async (id: string, email: string) => {
     if (!supabase) {
@@ -283,7 +537,7 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
       } else if (event === "SIGNED_OUT" && authMode === "Supabase") {
         setIsAuthenticated(false);
         setSessionUser(null);
-        setAuthMode("Demo");
+        setAuthMode("Supabase");
         setAuthReady(true);
       }
     });
@@ -301,16 +555,7 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
     };
     setCustodyEvents((events) => [createdEvent, ...events]);
     sharedHistoryLoadedAtRef.current = 0;
-
-    if (authMode === "Supabase" && supabase && sessionUser) {
-      void supabase
-        .from("custody_event_feed")
-        .insert(custodyFeedRecord(createdEvent, sessionUser.id))
-        .then(({ error }) => {
-          if (error) setMessage("Custody event saved locally. Shared history sync needs setup.");
-        });
-    }
-  }, [authMode, sessionUser]);
+  }, []);
 
   const loadCustodyHistory = useCallback(async () => {
     if (authMode !== "Supabase" || !supabase || !sessionUser) return;
@@ -328,29 +573,16 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    const existingIds = new Set((existingRecords ?? []).map((record) => record.id));
-    const missingRecords = custodyEventsRef.current.filter((event) => !existingIds.has(event.id));
-
-    if (missingRecords.length > 0) {
-      const { error: insertError } = await client
-        .from("custody_event_feed")
-        .insert(missingRecords.map((event) => custodyFeedRecord(event, sessionUser.id)));
-
-      if (insertError && insertError.code !== "23505") {
-        setMessage("Some local custody events could not join shared history.");
-        return;
-      }
-    }
-
-    const { data: sharedRecords, error: sharedError } = await selectFeed();
-    if (sharedError) {
-      setMessage("Shared custody history could not be loaded.");
-      return;
-    }
-
-    setCustodyEvents((sharedRecords ?? []).map(custodyEventFromFeed));
+    const mappedEvents = (existingRecords ?? []).map(custodyEventFromFeed);
+    const signatureUrls = await getSignedAssetUrls(
+      mappedEvents.flatMap((event) => event.signaturePath ? [event.signaturePath] : [])
+    );
+    setCustodyEvents(mappedEvents.map((event) => ({
+      ...event,
+      signatureImage: event.signaturePath ? signatureUrls.get(event.signaturePath) ?? "Signature stored" : event.signatureImage
+    })));
     sharedHistoryLoadedAtRef.current = Date.now();
-  }, [authMode, sessionUser]);
+  }, [authMode, getSignedAssetUrls, sessionUser]);
 
   const upsertEvidence = useCallback((record: Evidence) => {
     setEvidence((items) => {
@@ -362,30 +594,21 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const signIn = useCallback((nextRole: Role, email: string) => {
-    setRole(nextRole);
-    setSessionUser(null);
-    setAuthMode("Demo");
-    setIsAuthenticated(true);
-    setAuthReady(true);
-    setMessage(`Signed in as ${nextRole} for ${email || "demo account"}.`);
-    return true;
-  }, []);
-
   const signInWithPassword = useCallback(async (email: string, password: string) => {
     if (!supabase) {
-      setMessage("Secure sign-in settings are missing. Use demo sign-in for now.");
+      setMessage("Secure sign-in settings are unavailable.");
       return false;
     }
 
-    if (!email.trim() || !password) {
-      setMessage("Enter an email address and password.");
+    const parsed = signInSchema.safeParse({ email, password });
+    if (!parsed.success) {
+      setMessage("Enter a valid email address and password.");
       return false;
     }
 
-    const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+    const { data, error } = await supabase.auth.signInWithPassword(parsed.data);
     if (error || !data.user?.email) {
-      setMessage(error?.message ?? "Secure sign-in failed.");
+      setMessage("Sign-in failed. Check your details or contact your System Admin.");
       return false;
     }
 
@@ -400,7 +623,7 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
     if (!user?.email) {
       setIsAuthenticated(false);
       setSessionUser(null);
-      setAuthMode("Demo");
+      setAuthMode("Supabase");
       setAuthReady(true);
       setMessage("Your session has ended. Sign in again.");
       return false;
@@ -422,26 +645,27 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
       return false;
     }
 
-    if (!request.fullName.trim() || !request.email.trim() || !request.password || !request.badgeId.trim() || !request.agency.trim()) {
-      setMessage("Complete every access request field.");
+    const parsed = accessRequestSchema.safeParse(request);
+    if (!parsed.success) {
+      setMessage("Review the access request details and password requirements.");
       return false;
     }
 
     const { error } = await supabase.auth.signUp({
-      email: request.email.trim(),
-      password: request.password,
+      email: parsed.data.email,
+      password: parsed.data.password,
       options: {
         data: {
-          full_name: request.fullName.trim(),
-          requested_role: request.requestedRole,
-          badge_id: request.badgeId.trim(),
-          agency: request.agency.trim()
+          full_name: parsed.data.fullName,
+          requested_role: parsed.data.requestedRole,
+          badge_id: parsed.data.badgeId,
+          agency: parsed.data.agency
         }
       }
     });
 
     if (error) {
-      setMessage(error.message);
+      setMessage("Account request could not be submitted. Check the details or use a different email.");
       return false;
     }
 
@@ -539,36 +763,26 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
     requestType: SupportRequest["requestType"];
     message: string;
   }) => {
-    if (!request.fullName.trim() || !request.email.trim() || !request.message.trim()) {
-      setMessage("Enter your name, email, and report details.");
+    const parsed = supportRequestSchema.safeParse(request);
+    if (!parsed.success) {
+      setMessage("Enter valid contact details and a report between 1 and 2,000 characters.");
       return false;
     }
 
-    if (supabase) {
-      const { error } = await supabase.from("support_requests").insert({
-        full_name: request.fullName.trim(),
-        email: request.email.trim(),
-        request_type: request.requestType,
-        message: request.message.trim()
-      });
-      if (error) {
-        setMessage(error.message);
-        return false;
-      }
-    } else {
-      setSupportRequests((items) => [
-        {
-          id: makeId("SUP"),
-          fullName: request.fullName.trim(),
-          email: request.email.trim(),
-          requestType: request.requestType,
-          message: request.message.trim(),
-          status: "Open",
-          createdAt: new Date().toISOString(),
-          resolvedAt: null
-        },
-        ...items
-      ]);
+    if (!supabase) {
+      setMessage("Support requests are unavailable until secure backend settings are configured.");
+      return false;
+    }
+
+    const { error } = await supabase.from("support_requests").insert({
+      full_name: parsed.data.fullName,
+      email: parsed.data.email,
+      request_type: parsed.data.requestType,
+      message: parsed.data.message
+    });
+    if (error) {
+      setMessage("Your report could not be sent. Try again later.");
+      return false;
     }
 
     setMessage("Your report has been sent to the System Admin.");
@@ -626,9 +840,9 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
     if (authMode === "Supabase" && supabase) void supabase.auth.signOut();
     setIsAuthenticated(false);
     setSessionUser(null);
-    setAuthMode("Demo");
+    setAuthMode("Supabase");
     setAuthReady(true);
-    setMessage("Signed out. Demo data stayed local.");
+    setMessage("Signed out.");
   }, [authMode]);
 
   const addUser = useCallback((user: Omit<User, "id" | "status">) => {
@@ -717,13 +931,43 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
     setMessage(`Password reset recorded for ${user.name} in the demo directory.`);
   }, [authMode, role, users]);
 
-  const generateBarcodeBatch = useCallback((quantity: number) => {
+  const generateBarcodeBatch = useCallback(async (quantity: number) => {
     if (role !== "System Admin") {
       setMessage("Only System Admin accounts generate barcode batches.");
       return false;
     }
 
-    const safeQuantity = Math.min(Math.max(quantity, 1), 48);
+    const quantityResult = barcodeQuantitySchema.safeParse(quantity);
+    if (!quantityResult.success) {
+      setMessage("Enter a barcode quantity from 1 to 48.");
+      return false;
+    }
+
+    const safeQuantity = quantityResult.data;
+
+    if (authMode === "Supabase" && supabase) {
+      const { data, error } = await supabase.rpc("generate_barcode_batch", { requested_quantity: safeQuantity });
+      if (error || !data) {
+        setMessage(`Barcode batch failed: ${error?.message ?? "No labels returned."}`);
+        return false;
+      }
+
+      const generatedRows = data as { batch_id: string; barcode_value: string; created_at: string }[];
+      setBarcodeBatches((items) => [
+        {
+          id: generatedRows[0]?.batch_id ?? makeId("BAT"),
+          createdBy: currentUser.name,
+          quantity: generatedRows.length,
+          barcodePrefix: "FX",
+          createdAt: displayDate(generatedRows[0]?.created_at ?? new Date().toISOString()),
+          barcodes: generatedRows.map((row) => row.barcode_value)
+        },
+        ...items
+      ]);
+      setMessage(`${generatedRows.length} barcode labels generated.`);
+      return true;
+    }
+
     const start = barcodeBatches.reduce((total, batch) => total + batch.quantity, 100);
     const barcodes = Array.from({ length: safeQuantity }, (_, index) =>
       `FX-${String(start + index + 1).padStart(6, "0")}`
@@ -742,9 +986,9 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
     ]);
     setMessage(`${safeQuantity} barcode labels generated.`);
     return true;
-  }, [barcodeBatches, currentUser.name, role]);
+  }, [authMode, barcodeBatches, currentUser.name, role]);
 
-  const startNewEvidence = useCallback(() => {
+  const startNewEvidence = useCallback(async () => {
     if (role !== "Investigator") {
       setMessage("Only Investigator accounts start evidence intake.");
       return false;
@@ -755,25 +999,29 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
       recoveredBy: currentUser.name,
       recoveryDateTime: nowLabel(),
       gpsCoordinates: "14.5697 N, 120.9842 E",
-      id: "EV-DRAFT"
+      id: makeId("EV-DRAFT"),
+      recoveredById: sessionUser?.id
     };
-    setActiveEvidence(draft);
-    setMessage("New evidence workflow started.");
-    return true;
-  }, [currentUser.name, role]);
 
-  const assignBarcode = useCallback((barcode: string) => {
+    setEvidence((items) => [draft, ...items]);
+    setActiveEvidence(draft);
+    if (!(await persistEvidenceRecord(draft, "create"))) return false;
+    setMessage("Draft saved. Continue when ready.");
+    return true;
+  }, [currentUser.name, persistEvidenceRecord, role, sessionUser?.id]);
+
+  const assignBarcode = useCallback(async (barcode: string) => {
     if (role !== "Investigator") {
       setMessage("Only Investigator accounts assign evidence barcodes.");
       return false;
     }
 
-    const cleanBarcode = barcode.trim().toUpperCase();
-
-    if (!/^FX-\d{6}$/.test(cleanBarcode)) {
+    const barcodeResult = barcodeSchema.safeParse(barcode);
+    if (!barcodeResult.success) {
       setMessage("Use a FORENX barcode in the FX-000000 format.");
       return false;
     }
+    const cleanBarcode = barcodeResult.data;
 
     const assignedElsewhere = evidence.some(
       (record) => record.barcode === cleanBarcode && record.id !== activeEvidence.id
@@ -790,22 +1038,58 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
       return false;
     }
 
-    const evidenceId = `EV-2026-${cleanBarcode.slice(-4)}`;
+    const evidenceId = `EV-${new Date().getFullYear()}-${cleanBarcode.slice(-4)}`;
 
-    setActiveEvidence((current) => ({
-      ...current,
+    if (authMode === "Supabase" && supabase) {
+      const client = supabase;
+      const assignRemoteBarcode = () => client.rpc("assign_barcode_to_evidence", {
+        draft_evidence_id: activeEvidence.id,
+        scanned_barcode: cleanBarcode
+      });
+      let { data, error } = await assignRemoteBarcode();
+
+      if (error?.message.includes("Draft evidence record was not found")) {
+        const savedDraft = await persistEvidenceRecord(activeEvidence, "create");
+        if (savedDraft) ({ data, error } = await assignRemoteBarcode());
+      }
+
+      if (error || !data) {
+        setMessage(`Barcode assignment failed: ${error?.message ?? "No evidence record returned."}`);
+        return false;
+      }
+
+      const assignedRecord = {
+        ...evidenceFromRow((Array.isArray(data) ? data[0] : data) as EvidenceRow),
+        photoCaptures: activeEvidence.photoCaptures,
+        investigatorSignature: activeEvidence.investigatorSignature,
+        labSignature: activeEvidence.labSignature
+      };
+      setActiveEvidence(assignedRecord);
+      setEvidence((items) => [assignedRecord, ...items.filter((item) => item.id !== activeEvidence.id)]);
+      setMessage(`${cleanBarcode} assigned to active evidence.`);
+      return true;
+    }
+
+    const record: Evidence = {
+      ...activeEvidence,
       id: evidenceId,
       barcode: cleanBarcode,
       recoveredBy: currentUser.name,
-      recoveryDateTime: current.recoveryDateTime || nowLabel(),
-      gpsCoordinates: current.gpsCoordinates || "14.5697 N, 120.9842 E",
+      recoveryDateTime: activeEvidence.recoveryDateTime || nowLabel(),
+      gpsCoordinates: activeEvidence.gpsCoordinates || "14.5697 N, 120.9842 E",
       status: "Draft"
-    }));
+    };
+
+    setActiveEvidence(record);
+    setEvidence((items) => [
+      record,
+      ...items.filter((item) => item.id !== activeEvidence.id)
+    ]);
     setMessage(`${cleanBarcode} assigned to active evidence.`);
     return true;
-  }, [activeEvidence.id, barcodeBatches, currentUser.name, evidence, role]);
+  }, [activeEvidence, authMode, barcodeBatches, currentUser.name, evidence, persistEvidenceRecord, role]);
 
-  const completeSpatialCapture = useCallback((photoCaptures: string[], threeDCaptureRequested: boolean) => {
+  const completeSpatialCapture = useCallback(async (photoCaptures: string[], threeDCaptureRequested: boolean) => {
     if (role !== "Investigator") {
       setMessage("Only Investigator accounts capture scene condition data.");
       return false;
@@ -821,25 +1105,38 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
       return false;
     }
 
-    setActiveEvidence((current) => ({
-      ...current,
+    const record: Evidence = {
+      ...activeEvidence,
       photoCaptures,
       threeDCaptureRequested,
       spatialCaptureStatus: "Captured",
       spatialCapturePreview: `${photoCaptures.length} 2D evidence photo${photoCaptures.length === 1 ? "" : "s"} captured${threeDCaptureRequested ? "; 3D capture requested" : ""}`
-    }));
+    };
+
+    if (!(await uploadEvidencePhotos(record, photoCaptures))) return false;
+    if (!(await persistEvidenceRecord(record))) return false;
+    setActiveEvidence(record);
+    setEvidence((items) => items.map((item) => (item.id === record.id ? record : item)));
     setMessage("2D evidence photos saved.");
     return true;
-  }, [activeEvidence.barcode, role]);
+  }, [activeEvidence, persistEvidenceRecord, role, uploadEvidencePhotos]);
 
   const updateActiveEvidence = useCallback((field: keyof Evidence, value: string) => {
-    setActiveEvidence((current) => ({
-      ...current,
-      [field]: value
-    }));
-  }, []);
+    if (role !== "Investigator") {
+      setMessage("Only Investigator accounts edit evidence collection fields.");
+      return;
+    }
 
-  const saveEvidenceForm = useCallback((signature: string) => {
+    const record: Evidence = {
+      ...activeEvidence,
+      [field]: value
+    };
+
+    setActiveEvidence(record);
+    setEvidence((items) => items.map((item) => (item.id === record.id ? record : item)));
+  }, [activeEvidence, role]);
+
+  const saveEvidenceForm = useCallback(async (signature: string) => {
     if (role !== "Investigator") {
       setMessage("Only Investigator accounts log evidence forms.");
       return false;
@@ -847,6 +1144,11 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
 
     if (activeEvidence.status !== "Draft") {
       setMessage("Only Draft evidence records are ready for logging.");
+      return false;
+    }
+
+    if (!evidenceFormSchema.safeParse(activeEvidence).success) {
+      setMessage("Review the evidence details before logging the record.");
       return false;
     }
 
@@ -878,12 +1180,22 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
       return false;
     }
 
+    const signatureValue = signature || activeEvidence.investigatorSignature || currentUser.name;
+    if (!signatureDataSchema.safeParse(signatureValue).success && signatureValue !== currentUser.name) {
+      setMessage("Save a valid investigator signature before logging evidence.");
+      return false;
+    }
+    const signatureAsset = await uploadSignatureAsset(activeEvidence.id, "collection", signatureValue);
+    if (!signatureAsset) return false;
+
     const signedRecord: Evidence = {
       ...activeEvidence,
-      investigatorSignature: signature || activeEvidence.investigatorSignature || currentUser.name,
+      investigatorSignature: signatureAsset.preview,
+      investigatorSignaturePath: signatureAsset.path ?? activeEvidence.investigatorSignaturePath,
       status: "Logged"
     };
 
+    if (!(await persistEvidenceRecord(signedRecord))) return false;
     setActiveEvidence(signedRecord);
     upsertEvidence(signedRecord);
     addCustodyEvent({
@@ -894,13 +1206,14 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
       role: "Investigator",
       location: signedRecord.locationDetails || signedRecord.gpsCoordinates,
       signatureImage: signedRecord.investigatorSignature,
+      signaturePath: signedRecord.investigatorSignaturePath,
       status: "Logged"
     });
     setMessage("Evidence form logged with investigator signature.");
     return true;
-  }, [activeEvidence, addCustodyEvent, currentUser.name, role, upsertEvidence]);
+  }, [activeEvidence, addCustodyEvent, currentUser.name, persistEvidenceRecord, role, uploadSignatureAsset, upsertEvidence]);
 
-  const transferEvidence = useCallback((destinationLab: string, signature: string) => {
+  const transferEvidence = useCallback(async (destinationLab: string, signature: string) => {
     if (role !== "Investigator") {
       setMessage("Only Investigator accounts transfer evidence.");
       return false;
@@ -911,18 +1224,21 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
       return false;
     }
 
-    if (!destinationLab || !signature) {
+    if (!destinationLab.trim() || !signatureDataSchema.safeParse(signature).success || !signature) {
       setMessage("Select a destination and save a transfer signature.");
       return false;
     }
 
+    const signatureAsset = await uploadSignatureAsset(activeEvidence.id, "transfer", signature);
+    if (!signatureAsset) return false;
+
     const record: Evidence = {
       ...activeEvidence,
       destinationLab,
-      investigatorSignature: signature || activeEvidence.investigatorSignature || currentUser.name,
       status: "In Transit"
     };
 
+    if (!(await persistEvidenceRecord(record))) return false;
     setActiveEvidence(record);
     upsertEvidence(record);
     addCustodyEvent({
@@ -932,20 +1248,26 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
       toUser: destinationLab,
       role: "Investigator",
       location: "Field transfer point",
-      signatureImage: record.investigatorSignature,
+      signatureImage: signatureAsset.preview,
+      signaturePath: signatureAsset.path,
       status: "In Transit"
     });
     setMessage(`${record.id} marked In Transit.`);
     return true;
-  }, [activeEvidence, addCustodyEvent, currentUser.name, role, upsertEvidence]);
+  }, [activeEvidence, addCustodyEvent, currentUser.name, persistEvidenceRecord, role, uploadSignatureAsset, upsertEvidence]);
 
-  const receiveEvidence = useCallback((barcode: string, signature: string) => {
+  const receiveEvidence = useCallback(async (barcode: string, signature: string) => {
     if (role !== "Laboratory Analyst") {
       setMessage("Only Laboratory Analyst accounts accept lab custody.");
       return false;
     }
 
-    const cleanBarcode = barcode.trim().toUpperCase();
+    const barcodeResult = barcodeSchema.safeParse(barcode);
+    if (!barcodeResult.success) {
+      setMessage("Barcode mismatch. Lab custody not accepted.");
+      return false;
+    }
+    const cleanBarcode = barcodeResult.data;
     const incomingRecord = evidence.find((record) => record.barcode === cleanBarcode);
 
     if (!incomingRecord || incomingRecord.status !== "In Transit") {
@@ -953,17 +1275,22 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
       return false;
     }
 
-    if (!signature) {
+    if (!signature || !signatureDataSchema.safeParse(signature).success) {
       setMessage("Save the laboratory signature before accepting custody.");
       return false;
     }
 
+    const signatureAsset = await uploadSignatureAsset(incomingRecord.id, "lab-acceptance", signature);
+    if (!signatureAsset) return false;
+
     const record: Evidence = {
       ...incomingRecord,
-      labSignature: signature,
+      labSignature: signatureAsset.preview,
+      labSignaturePath: signatureAsset.path ?? incomingRecord.labSignaturePath,
       status: "In Lab Custody"
     };
 
+    if (!(await persistEvidenceRecord(record))) return false;
     setActiveEvidence(record);
     upsertEvidence(record);
     addCustodyEvent({
@@ -974,31 +1301,95 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
       role: "Laboratory Analyst",
       location: "Forensic Lab",
       signatureImage: record.labSignature,
+      signaturePath: record.labSignaturePath,
       status: "In Lab Custody"
     });
     setMessage(`${record.id} accepted by laboratory.`);
     return true;
-  }, [addCustodyEvent, currentUser.name, evidence, role, upsertEvidence]);
+  }, [addCustodyEvent, currentUser.name, evidence, persistEvidenceRecord, role, uploadSignatureAsset, upsertEvidence]);
+
+  const closeEvidence = useCallback(async () => {
+    if (role !== "Laboratory Analyst") {
+      setMessage("Only Laboratory Analyst accounts close evidence records.");
+      return false;
+    }
+
+    if (activeEvidence.status !== "In Lab Custody") {
+      setMessage("Only evidence in laboratory custody is ready to close.");
+      return false;
+    }
+
+    const record: Evidence = { ...activeEvidence, status: "Closed" };
+    if (!(await persistEvidenceRecord(record))) return false;
+
+    setActiveEvidence(record);
+    upsertEvidence(record);
+    addCustodyEvent({
+      evidenceId: record.id,
+      action: "Evidence closed",
+      fromUser: currentUser.name,
+      toUser: "Evidence archive",
+      role: "Laboratory Analyst",
+      location: "Forensic Lab",
+      signatureImage: record.labSignature,
+      signaturePath: record.labSignaturePath,
+      status: "Closed"
+    });
+    setMessage(`${record.id} closed and moved to the evidence archive.`);
+    return true;
+  }, [activeEvidence, addCustodyEvent, currentUser.name, persistEvidenceRecord, role, upsertEvidence]);
 
   const selectEvidence = useCallback((id: string) => {
     const record = evidence.find((item) => item.id === id);
     if (record) setActiveEvidence(record);
   }, [evidence]);
 
+  const deleteDraftEvidence = useCallback(async (id: string) => {
+    if (role !== "Investigator") {
+      setMessage("Only Investigator accounts manage draft evidence.");
+      return;
+    }
+
+    const record = evidence.find((item) => item.id === id);
+    if (!record || record.status !== "Draft") {
+      setMessage("Only Draft records can be deleted.");
+      return;
+    }
+
+    if (authMode === "Supabase" && supabase) {
+      const { data: mediaRows } = await supabase
+        .from("evidence_media")
+        .select("storage_path")
+        .eq("evidence_id", id);
+      const { error } = await supabase.from("evidence").delete().eq("id", id);
+      if (error) {
+        setMessage(`Draft deletion failed: ${error.message}`);
+        return;
+      }
+
+      const paths = (mediaRows ?? []).map((media) => media.storage_path);
+      if (paths.length > 0) void supabase.storage.from("forenx-evidence-media").remove(paths);
+    }
+
+    setEvidence((items) => items.filter((item) => item.id !== id));
+    if (activeEvidence.id === id) setActiveEvidence(emptyEvidence);
+    setMessage(`Draft ${id} deleted.`);
+  }, [activeEvidence.id, authMode, evidence, role]);
+
   const resetDemo = useCallback(() => {
     setIsAuthenticated(false);
     setAuthReady(true);
     setSessionUser(null);
-    setAuthMode("Demo");
-    setUsers(initialUsers);
+    setAuthMode("Supabase");
+    setUsers([]);
     setAccessRequests([]);
     setSupportRequests([]);
     setRole("Investigator");
-    setEvidence(initialEvidenceRecords);
-    setActiveEvidence(initialEvidenceRecords[0]);
-    setBarcodeBatches(initialBarcodeBatches);
-    setCustodyEvents(initialCustodyEvents);
-    setMessage("Demo data restored.");
+    setEvidence([]);
+    setActiveEvidence(emptyEvidence);
+    setBarcodeBatches([]);
+    setCustodyEvents([]);
+    setMessage("Local session state cleared.");
   }, []);
 
   const store = useMemo<Store>(
@@ -1012,16 +1403,17 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
       accessRequests,
       supportRequests,
       evidence,
+      evidenceLoading,
       activeEvidence,
       barcodeBatches,
       custodyEvents,
       message,
-      backendMode: supabaseReady ? "Connected" : "Demo data",
-      signIn,
+      messageVersion,
+      dismissedMessageVersion,
+      backendMode: supabaseReady ? "Connected" : "Configuration required",
       signInWithPassword,
       signUpForAccess,
       signOut,
-      setRole,
       addUser,
       setUserStatus,
       resetPassword,
@@ -1042,7 +1434,10 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
       saveEvidenceForm,
       transferEvidence,
       receiveEvidence,
+      closeEvidence,
       selectEvidence,
+      deleteDraftEvidence,
+      dismissMessage,
       resetDemo
     }),
     [
@@ -1056,6 +1451,7 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
       currentUser,
       custodyEvents,
       evidence,
+      evidenceLoading,
       generateBarcodeBatch,
       isAuthenticated,
       authReady,
@@ -1065,7 +1461,11 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
       loadSupportRequests,
       loadUserDirectory,
       message,
+      messageVersion,
+      dismissedMessageVersion,
+      deleteDraftEvidence,
       receiveEvidence,
+      closeEvidence,
       rejectAccessRequest,
       resolveSupportRequest,
       resetDemo,
@@ -1074,7 +1474,7 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
       role,
       saveEvidenceForm,
       selectEvidence,
-      signIn,
+      dismissMessage,
       signInWithPassword,
       signUpForAccess,
       submitSupportRequest,

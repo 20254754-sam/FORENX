@@ -5,6 +5,7 @@ export type AppView =
   | "dashboard"
   | "admin-users"
   | "admin-barcodes"
+  | "admin-lookup"
   | "scan"
   | "capture"
   | "evidence"
@@ -78,8 +79,11 @@ export type Evidence = {
   gpsCoordinates: string;
   locationDetails: string;
   recoveredBy: string;
+  recoveredById?: string;
   investigatorSignature: string;
+  investigatorSignaturePath?: string;
   labSignature: string;
+  labSignaturePath?: string;
   photoCaptures: string[];
   threeDCaptureRequested: boolean;
   spatialCaptureStatus: CaptureStatus;
@@ -98,5 +102,6 @@ export type CustodyEvent = {
   timestamp: string;
   location: string;
   signatureImage: string;
+  signaturePath?: string;
   status: EvidenceStatus;
 };

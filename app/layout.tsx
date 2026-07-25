@@ -5,8 +5,12 @@ import { PwaRegister } from "./ui/pwa-register";
 
 export const metadata: Metadata = {
   title: "FORENX Evidence Tracking",
-  description: "Barcode-based evidence tracking website prototype",
-  manifest: "/manifest.webmanifest"
+  description: "Secure barcode-based evidence tracking",
+  manifest: "/manifest.webmanifest",
+  icons: {
+    icon: [{ url: "/images/forenx-x-logo.png", type: "image/png", sizes: "256x256" }],
+    apple: [{ url: "/images/forenx-x-logo.png", type: "image/png", sizes: "256x256" }]
+  }
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

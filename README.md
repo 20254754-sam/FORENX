@@ -1,6 +1,6 @@
 # FORENX Evidence Tracking
 
-FORENX is a barcode-based evidence tracking website pilot. The current build supports a three-role workflow:
+FORENX is a barcode-based evidence tracking website. The app supports a three-role workflow:
 
 - System Admin: user records, barcode batches, audit review.
 - Investigator: barcode assignment, scene capture, evidence form, collection signature, transfer.
@@ -15,15 +15,15 @@ npm run dev
 
 Open `http://localhost:3000/login`.
 
-## Pilot workflow
+## Workflow
 
-1. Sign in through the demo role selector.
-2. System Admin generates an approved barcode batch.
-3. Investigator starts a draft and assigns an unused barcode.
-4. Investigator saves spatial capture, completes the evidence form, and saves a collection signature.
-5. Investigator selects a laboratory and signs the transfer.
-6. Laboratory Analyst selects an incoming record, scans or enters its barcode, and saves an acceptance signature.
-7. Review custody events in History.
+1. A System Admin creates and approves Investigator or Laboratory Analyst accounts.
+2. A System Admin generates an approved barcode batch.
+3. An Investigator starts a saved draft and assigns an unused barcode.
+4. The Investigator uploads scene photos, completes the form, and signs collection.
+5. The Investigator selects a laboratory and signs the transfer.
+6. A Laboratory Analyst scans or enters the barcode and signs custody acceptance.
+7. Every role reviews shared custody events in History.
 
 The website blocks skipped collection steps, duplicate barcodes, invalid barcode format, unsigned evidence forms, unsigned transfers, and laboratory acceptance outside In Transit status.
 
@@ -48,15 +48,14 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 
 ## Supabase setup
 
-Use a new Supabase project for a production pilot.
+Use a Supabase project for production.
 
 1. Open the Supabase SQL Editor.
 2. Run [production-schema.sql](./supabase/production-schema.sql).
 3. Create the first Auth user.
 4. Add a matching row in `public.profiles` with role `System Admin`.
-5. Create private Storage buckets named `forenx-signatures` and `forenx-evidence-media`.
-6. Add Storage policies before enabling uploads.
-7. Add your Vercel URL to Supabase Auth redirect URLs.
+5. Run [enable-production-evidence-flow.sql](./supabase/enable-production-evidence-flow.sql).
+6. Add your Vercel URL to Supabase Auth redirect URLs.
 
 The existing `supabase/schema.sql` file belongs to the earlier demo database model. Use `production-schema.sql` for a fresh production-pilot database.
 
@@ -80,7 +79,7 @@ The user directory tracks:
 
 ## PWA support
 
-The production build registers a service worker and web manifest. This supports app installation and cached page access. A full offline sync queue, IndexedDB records, and conflict handling still need backend work before field deployment.
+The production build registers a service worker and web manifest. The app caches its shell for reconnecting users. Evidence writes require an active connection.
 
 ## Release checklist
 
@@ -92,9 +91,5 @@ The production build registers a service worker and web manifest. This supports 
 6. Set Vercel environment variables.
 7. Deploy a Vercel preview.
 8. Test Supabase Auth, database rules, and Storage access from the preview URL.
-9. Review audit events with the project team.
-10. Publish after pilot approval.
-
-## Pilot limits
-
-This build is a school or controlled pilot. Real evidence handling needs legal review, agency security approval, retention rules, offline-sync testing, backup procedures, monitoring, and incident response before operational use.
+9. Review audit events with your security owner.
+10. Publish after access and storage checks pass.
