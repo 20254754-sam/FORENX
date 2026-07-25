@@ -168,6 +168,40 @@ function ActionToast() {
   );
 }
 
+function ConfirmDialog({
+  title,
+  description,
+  confirmLabel,
+  destructive = false,
+  onCancel,
+  onConfirm
+}: {
+  title: string;
+  description: string;
+  confirmLabel: string;
+  destructive?: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4" role="presentation">
+      <section className="w-full max-w-md border border-cyanline bg-[#091216] shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
+        <div className="border-b border-slate-800 px-5 py-4">
+          <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-cyan-300">Confirmation required</p>
+          <h2 id="confirm-dialog-title" className="mt-1 text-lg font-semibold text-white">{title}</h2>
+        </div>
+        <p className="px-5 py-4 text-sm leading-6 text-slate-300">{description}</p>
+        <div className="flex justify-end gap-2 border-t border-slate-800 px-5 py-4">
+          <button className="btn-secondary min-h-9" type="button" onClick={onCancel}>Cancel</button>
+          <button className={destructive ? "min-h-9 border border-rose-700 bg-rose-950 px-3 text-sm font-semibold text-rose-100 hover:bg-rose-900" : "btn-primary min-h-9"} type="button" onClick={onConfirm}>
+            {confirmLabel}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function LoginRequired() {
   return (
     <Panel eyebrow="Authentication required" title="Sign in to open this workspace">
@@ -832,6 +866,7 @@ function InvestigatorWorkflowCommand() {
 function AdminUsersView() {
   const { users, accessRequests, supportRequests, loadAccessRequests, loadSupportRequests, loadUserDirectory, approveAccessRequest, rejectAccessRequest, resolveSupportRequest, setUserStatus, resetPassword } = useForenxStore();
   const [filter, setFilter] = useState<Role | "All">("All");
+  const [confirmation, setConfirmation] = useState<{ title: string; description: string; confirmLabel: string; destructive?: boolean; action: () => void } | null>(null);
 
   const visibleUsers = filter === "All" ? users : users.filter((user) => user.role === filter);
   const openSupportRequests = supportRequests.filter((request) => request.status === "Open");
@@ -989,7 +1024,12 @@ function AdminUsersView() {
                         className="btn-secondary min-h-8 min-w-0 flex-1 whitespace-nowrap px-2 text-xs"
                         type="button"
                         onClick={() => {
-                          if (window.confirm(`Send a password reset email to ${user.email}?`)) void resetPassword(user.id);
+                          setConfirmation({
+                            title: "Send password reset",
+                            description: `Send a password reset email to ${user.email}?`,
+                            confirmLabel: "Send reset email",
+                            action: () => void resetPassword(user.id)
+                          });
                         }}
                       >
                         Reset
@@ -999,9 +1039,13 @@ function AdminUsersView() {
                         type="button"
                         onClick={() => {
                           const nextStatus = user.status === "Active" ? "Inactive" : "Active";
-                          if (window.confirm(`${nextStatus === "Inactive" ? "Deactivate" : "Activate"} ${user.name}'s FORENX account?`)) {
-                            void setUserStatus(user.id, nextStatus);
-                          }
+                          setConfirmation({
+                            title: `${nextStatus === "Inactive" ? "Deactivate" : "Activate"} account`,
+                            description: `${nextStatus === "Inactive" ? "Deactivate" : "Activate"} ${user.name}'s FORENX account?`,
+                            confirmLabel: nextStatus === "Inactive" ? "Deactivate account" : "Activate account",
+                            destructive: nextStatus === "Inactive",
+                            action: () => void setUserStatus(user.id, nextStatus)
+                          });
                         }}
                       >
                         {user.status === "Active" ? "Deactivate" : "Activate"}
@@ -1014,6 +1058,19 @@ function AdminUsersView() {
           </table>
         </div>
       </Panel>
+      {confirmation && (
+        <ConfirmDialog
+          title={confirmation.title}
+          description={confirmation.description}
+          confirmLabel={confirmation.confirmLabel}
+          destructive={confirmation.destructive}
+          onCancel={() => setConfirmation(null)}
+          onConfirm={() => {
+            confirmation.action();
+            setConfirmation(null);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -1876,9 +1933,9 @@ function SettingsView() {
   const router = useRouter();
   const { authMode, backendMode, currentUser, role, resetDemo, signOut } = useForenxStore();
   const workspace = settingsWorkspace(role);
+  const [showResetConfirmation, setShowResetConfirmation] = useState(false);
 
   function handleReset() {
-    if (!window.confirm("Reset local demo records and sign out?")) return;
     resetDemo();
     router.push("/login");
   }
@@ -1922,7 +1979,7 @@ function SettingsView() {
           />
           <div className="mt-3 flex flex-wrap gap-2">
             {authMode === "Demo" && (
-              <button className="btn-secondary" type="button" onClick={handleReset}>
+              <button className="btn-secondary" type="button" onClick={() => setShowResetConfirmation(true)}>
                 <RotateCcw className="mr-2 h-4 w-4" /> Reset demo
               </button>
             )}
@@ -1932,6 +1989,19 @@ function SettingsView() {
           </div>
         </Panel>
       </Grid>
+      {showResetConfirmation && (
+        <ConfirmDialog
+          title="Reset local records"
+          description="Clear local records and sign out of this workspace?"
+          confirmLabel="Reset and sign out"
+          destructive
+          onCancel={() => setShowResetConfirmation(false)}
+          onConfirm={() => {
+            setShowResetConfirmation(false);
+            handleReset();
+          }}
+        />
+      )}
     </div>
   );
 }
