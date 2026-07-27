@@ -42,6 +42,8 @@ type Store = {
   messageVersion: number;
   dismissedMessageVersion: number;
   backendMode: string;
+  tourStatus: "Loading" | "Unseen" | "Dismissed" | "Completed" | "Unavailable";
+  guidedTour: { active: boolean; step: number };
   signInWithPassword: (email: string, password: string) => Promise<boolean>;
   signUpForAccess: (request: {
     fullName: string;
@@ -69,6 +71,10 @@ type Store = {
   resolveSupportRequest: (id: string) => Promise<void>;
   loadCustodyHistory: () => Promise<void>;
   refreshSession: () => Promise<boolean>;
+  recordTourResponse: (response: "dismissed" | "completed") => Promise<boolean>;
+  startGuidedTour: () => void;
+  setGuidedTourStep: (step: number) => void;
+  stopGuidedTour: () => void;
   generateBarcodeBatch: (quantity: number) => Promise<boolean>;
   startNewEvidence: () => Promise<boolean>;
   assignBarcode: (barcode: string) => Promise<boolean>;
@@ -218,6 +224,8 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
   const [activeEvidence, setActiveEvidence] = useState<Evidence>(emptyEvidence);
   const [barcodeBatches, setBarcodeBatches] = useState<BarcodeBatch[]>([]);
   const [custodyEvents, setCustodyEvents] = useState<CustodyEvent[]>([]);
+  const [tourStatus, setTourStatus] = useState<Store["tourStatus"]>("Loading");
+  const [guidedTour, setGuidedTour] = useState({ active: false, step: 0 });
   const sharedHistoryLoadedAtRef = useRef(0);
   const sharedEvidenceLoadedForRef = useRef("");
   const [messageState, setMessage] = useReducer(
@@ -519,10 +527,46 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
     setAuthMode("Supabase");
     setIsAuthenticated(true);
     setAuthReady(true);
+    // A missing optional migration must not prevent an approved user from signing in.
+    const { data: tourRows, error: tourError } = await supabase.rpc("get_my_tour_state");
+    if (tourError) {
+      setTourStatus("Unavailable");
+    } else {
+      const tour = Array.isArray(tourRows) ? tourRows[0] : tourRows;
+      setTourStatus(tour?.tour_completed_at ? "Completed" : tour?.tour_dismissed_at ? "Dismissed" : "Unseen");
+    }
     // Session recovery runs during navigation. Keep it silent and clear stale alerts.
     setMessage({ type: "dismiss" });
     void supabase.rpc("touch_my_profile_activity");
     return true;
+  }, []);
+
+  const recordTourResponse = useCallback(async (response: "dismissed" | "completed") => {
+    if (authMode !== "Supabase" || !supabase || !isAuthenticated) {
+      setMessage("Secure tour settings are unavailable.");
+      return false;
+    }
+
+    const { error } = await supabase.rpc("record_my_tour_response", { response });
+    if (error) {
+      setMessage("Website tour setup is incomplete. Run add-guided-tour.sql.");
+      return false;
+    }
+
+    setTourStatus(response === "completed" ? "Completed" : "Dismissed");
+    return true;
+  }, [authMode, isAuthenticated]);
+
+  const startGuidedTour = useCallback(() => {
+    setGuidedTour({ active: true, step: 0 });
+  }, []);
+
+  const setGuidedTourStep = useCallback((step: number) => {
+    setGuidedTour((current) => ({ ...current, step: Math.max(0, step) }));
+  }, []);
+
+  const stopGuidedTour = useCallback(() => {
+    setGuidedTour({ active: false, step: 0 });
   }, []);
 
   useEffect(() => {
@@ -843,8 +887,10 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
     setSessionUser(null);
     setAuthMode("Supabase");
     setAuthReady(true);
+    setTourStatus("Loading");
+    stopGuidedTour();
     setMessage("Signed out.");
-  }, [authMode]);
+  }, [authMode, stopGuidedTour]);
 
   const addUser = useCallback((user: Omit<User, "id" | "status">) => {
     if (role !== "System Admin") {
@@ -1390,8 +1436,10 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
     setActiveEvidence(emptyEvidence);
     setBarcodeBatches([]);
     setCustodyEvents([]);
+    setTourStatus("Loading");
+    stopGuidedTour();
     setMessage("Local session state cleared.");
-  }, []);
+  }, [stopGuidedTour]);
 
   const store = useMemo<Store>(
     () => ({
@@ -1412,6 +1460,8 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
       messageVersion,
       dismissedMessageVersion,
       backendMode: supabaseReady ? "Connected" : "Configuration required",
+      tourStatus,
+      guidedTour,
       signInWithPassword,
       signUpForAccess,
       signOut,
@@ -1427,6 +1477,10 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
       resolveSupportRequest,
       loadCustodyHistory,
       refreshSession,
+      recordTourResponse,
+      startGuidedTour,
+      setGuidedTourStep,
+      stopGuidedTour,
       generateBarcodeBatch,
       startNewEvidence,
       assignBarcode,
@@ -1454,6 +1508,7 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
       evidence,
       evidenceLoading,
       generateBarcodeBatch,
+      guidedTour,
       isAuthenticated,
       authReady,
       authMode,
@@ -1471,6 +1526,7 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
       resolveSupportRequest,
       resetDemo,
       resetPassword,
+      recordTourResponse,
       refreshSession,
       role,
       saveEvidenceForm,
@@ -1485,6 +1541,10 @@ export function ForenxStoreProvider({ children }: { children: ReactNode }) {
       updateActiveEvidence,
       setUserStatus,
       supportRequests,
+      setGuidedTourStep,
+      startGuidedTour,
+      stopGuidedTour,
+      tourStatus,
       users
     ]
   );

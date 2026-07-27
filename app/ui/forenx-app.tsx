@@ -25,6 +25,8 @@ import {
 } from "./icons";
 import type { AppView, Evidence, Role } from "@/lib/types";
 import { useForenxStore } from "./forenx-store";
+import { AccountProcessDialog, GuidedTour, TourPrompt } from "./guided-tour";
+import { EvidencePhotoGallery } from "./evidence-photo-gallery";
 
 type NavItem = {
   label: string;
@@ -67,7 +69,8 @@ export default function ForenxApp({ view }: { view: AppView }) {
   const pathname = usePathname();
   const router = useRouter();
   const store = useForenxStore();
-  const { authMode, authReady, isAuthenticated, refreshSession } = store;
+  const { authMode, authReady, isAuthenticated, refreshSession, recordTourResponse, tourStatus, guidedTour, startGuidedTour, setGuidedTourStep, stopGuidedTour } = store;
+  const [tourPromptHidden, setTourPromptHidden] = useState(false);
   const route = navItems.find((item) => item.href === pathname);
   const roleHasAccess = !route || route.roles.includes(store.role);
 
@@ -93,6 +96,16 @@ export default function ForenxApp({ view }: { view: AppView }) {
       router.replace("/dashboard");
     }
   }, [authReady, isAuthenticated, roleHasAccess, router, view]);
+
+  const tourPromptOpen = view === "dashboard" && isAuthenticated && tourStatus === "Unseen" && !guidedTour.active && !tourPromptHidden;
+
+  async function endTour(response: "dismissed" | "completed") {
+    const saved = await recordTourResponse(response);
+    if (saved) {
+      stopGuidedTour();
+      setTourPromptHidden(true);
+    }
+  }
 
   if (view === "login") {
     return (
@@ -125,7 +138,7 @@ export default function ForenxApp({ view }: { view: AppView }) {
         {view === "transfer" && <TransferView />}
         {view === "lab" && <LabView />}
         {view === "history" && <HistoryView />}
-        {view === "settings" && <SettingsView />}
+        {view === "settings" && <SettingsView onStartTour={startGuidedTour} />}
       </>
     );
   }
@@ -144,6 +157,8 @@ export default function ForenxApp({ view }: { view: AppView }) {
         </div>
       </div>
       <ActionToast />
+      {tourPromptOpen && <TourPrompt role={store.role} onStart={() => { setTourPromptHidden(true); startGuidedTour(); }} onDismiss={() => void endTour("dismissed")} />}
+      {guidedTour.active && <GuidedTour role={store.role} index={guidedTour.step} onIndexChange={setGuidedTourStep} onEnd={endTour} />}
     </main>
   );
 }
@@ -508,6 +523,7 @@ function LoginView() {
   const [supportMessage, setSupportMessage] = useState("");
   const [mode, setMode] = useState<"Supabase" | "Request" | "Support">("Supabase");
   const [submitting, setSubmitting] = useState(false);
+  const [accountGuideOpen, setAccountGuideOpen] = useState(false);
 
   async function handleSubmit() {
     if (mode === "Request") {
@@ -636,9 +652,13 @@ function LoginView() {
                 Return to sign in
               </button>
             )}
+            <button className="mt-3 text-left text-xs font-semibold text-cyan-300 hover:text-cyan-100" type="button" onClick={() => setAccountGuideOpen(true)}>
+              New here? View account process
+            </button>
           </div>
         </section>
       </div>
+      {accountGuideOpen && <AccountProcessDialog onClose={() => setAccountGuideOpen(false)} />}
     </main>
   );
 }
@@ -659,7 +679,7 @@ function DashboardView() {
         : "No field work pending";
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3" data-tour-id="tour-dashboard">
       <PageHeader
         eyebrow="Dashboard"
         title={`${role} workspace`}
@@ -878,7 +898,7 @@ function AdminUsersView() {
   }, [loadAccessRequests, loadSupportRequests, loadUserDirectory]);
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3" data-tour-id="tour-users">
       <PageHeader eyebrow="Admin" title="Account management" text="Approve and manage accounts." />
       <Panel eyebrow="Pending review" title={`${accessRequests.length} access request${accessRequests.length === 1 ? "" : "s"}`}>
         {accessRequests.length === 0 ? (
@@ -1088,7 +1108,7 @@ function BarcodeView() {
     <div className="barcode-page space-y-3">
       <PageHeader eyebrow="Admin" title="Barcode generation" text="Create printable field labels." />
       <Grid columns="xl:grid-cols-[360px_1fr]">
-        <div className="barcode-generator-panel">
+        <div className="barcode-generator-panel" data-tour-id="tour-barcodes">
           <Panel eyebrow="Batch" title="Generate labels">
             <TextField label="Quantity" value={quantity} onChange={setQuantity} type="number" />
             <div className="mt-3 flex flex-wrap gap-2">
@@ -1151,7 +1171,7 @@ function AdminEvidenceLookupView() {
   }
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3" data-tour-id="tour-lookup">
       <PageHeader eyebrow="Admin" title="Evidence lookup" text="Scan a label to review its record." />
       <Grid columns="xl:grid-cols-[minmax(0,1fr)_360px]">
         <Panel eyebrow="Lookup" title="Scan or enter barcode">
@@ -1286,6 +1306,7 @@ function ScanView() {
     <div className="space-y-3">
       <PageHeader eyebrow="Step A" title="Barcode assignment" text="Scan or enter a label." />
       <Grid columns="xl:grid-cols-[1fr_360px]">
+        <div data-tour-id="tour-scan">
         <Panel eyebrow="Scanner" title="New evidence intake">
           <div className="grid gap-3 md:grid-cols-[1fr_260px]">
             <div className="scan-window">
@@ -1303,6 +1324,7 @@ function ScanView() {
             </div>
           </div>
         </Panel>
+        </div>
         <EvidenceSummary record={activeEvidence} />
       </Grid>
     </div>
@@ -1424,7 +1446,7 @@ function CaptureView() {
   }
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3" data-tour-id="tour-capture">
       <PageHeader eyebrow="Step B" title="2D evidence capture" text="Add item photos." />
       <Grid columns="xl:grid-cols-[1fr_360px]">
         <Panel eyebrow="Required" title="2D evidence photos">
@@ -1510,6 +1532,7 @@ function EvidenceView() {
     <div className="space-y-3">
       <PageHeader eyebrow="Step C" title="Chain of custody form" text="Add details and sign." />
       <Grid columns="xl:grid-cols-[1fr_390px]">
+        <div data-tour-id="tour-details">
         <Panel eyebrow="Evidence form" title={activeEvidence.id}>
           <div className="grid gap-3 md:grid-cols-2">
             <TextField label="Case number" value={activeEvidence.caseNumber} onChange={(value) => updateActiveEvidence("caseNumber", value)} />
@@ -1529,6 +1552,7 @@ function EvidenceView() {
             <TextField label="Recovered by" value={activeEvidence.recoveredBy} onChange={(value) => updateActiveEvidence("recoveredBy", value)} readOnly />
           </div>
         </Panel>
+        </div>
         <Panel eyebrow="Verification" title="Investigator signature">
           <SignaturePad label="Collection signature" onSave={setSignature} />
           <button className="btn-primary mt-3 w-full" type="button" onClick={handleSave}>
@@ -1546,7 +1570,7 @@ function LaboratoryEvidenceReview() {
   const selectedRecord = reviewableRecords.find((record) => record.id === activeEvidence.id);
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3" data-tour-id="tour-evidence-review">
       <PageHeader eyebrow="Laboratory" title="Evidence review" text="Review collection details before custody acceptance." />
       <Panel eyebrow="Records" title="Available evidence">
         {reviewableRecords.length === 0 ? (
@@ -1606,19 +1630,11 @@ function LaboratoryEvidenceReview() {
             </Panel>
           </Grid>
           <Grid columns="xl:grid-cols-[minmax(0,1fr)_360px]">
+            <div data-tour-id="tour-evidence-review">
             <Panel eyebrow="Evidence capture" title="2D photos">
-              {selectedRecord.photoCaptures.length === 0 ? (
-                <p className="text-sm text-slate-500">No photo preview is stored in this browser session.</p>
-              ) : (
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                  {selectedRecord.photoCaptures.map((photo, index) => (
-                    <div key={`${photo.slice(0, 32)}-${index}`} className="relative aspect-[4/3] overflow-hidden border border-slate-700 bg-slate-950">
-                      <Image src={photo} alt={`Evidence photo ${index + 1}`} fill sizes="(max-width: 640px) 45vw, 240px" unoptimized className="object-cover" />
-                    </div>
-                  ))}
-                </div>
-              )}
+              <EvidencePhotoGallery photos={selectedRecord.photoCaptures} evidenceId={selectedRecord.id} />
             </Panel>
+            </div>
             <Panel eyebrow="Verification" title="Collection signature">
               <div className="signature-review"><SignatureCell value={selectedRecord.investigatorSignature} /></div>
               <div className="mt-3">
@@ -1646,6 +1662,7 @@ function TransferView() {
     <div className="space-y-3">
       <PageHeader eyebrow="Step D" title="Transfer custody" text="Choose a lab and sign." />
       <Grid columns="xl:grid-cols-[1fr_390px]">
+        <div data-tour-id="tour-transfer">
         <Panel eyebrow="Transfer record" title={activeEvidence.id}>
           <DetailRows
             rows={[
@@ -1659,6 +1676,7 @@ function TransferView() {
             <SelectField label="Destination" value={destination} onChange={setDestination} options={labs} />
           </div>
         </Panel>
+        </div>
         <Panel eyebrow="Signature" title="Transfer sign-off">
           <SignaturePad label="Investigator transfer signature" onSave={setSignature} />
           <button className="btn-primary mt-3 w-full" type="button" onClick={handleTransfer}>
@@ -1698,7 +1716,13 @@ function LabView() {
   return (
     <div className="space-y-3">
       <PageHeader eyebrow="Laboratory" title="Receive evidence" text="Match the label and accept custody." />
+      {activeEvidence.status === "In Transit" && (
+        <Panel eyebrow="Review before acceptance" title="2D evidence photos">
+          <EvidencePhotoGallery photos={activeEvidence.photoCaptures} evidenceId={activeEvidence.id} />
+        </Panel>
+      )}
       <Grid columns="xl:grid-cols-[1fr_390px]">
+        <div data-tour-id="tour-lab">
         <Panel eyebrow="Incoming" title="In Transit evidence">
           <div className="overflow-x-auto">
             <table className="data-table min-w-[860px]">
@@ -1736,6 +1760,7 @@ function LabView() {
             </table>
           </div>
         </Panel>
+        </div>
         <Panel eyebrow="Verification" title="Accept custody">
           <DetailRows rows={[["Selected evidence", activeEvidence.id], ["Record status", activeEvidence.status]]} />
           <TextField label="Scan arriving barcode" value={barcode} onChange={setBarcode} />
@@ -1775,7 +1800,7 @@ function HistoryView() {
     <div className="space-y-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <PageHeader eyebrow="History" title="Chain of custody" text="Collection, transfer, and lab events." />
-        <button className="btn-secondary shrink-0 gap-2" type="button" onClick={() => exportCustodyPdf(custodyEvents)}>
+        <button className="btn-secondary shrink-0 gap-2" data-tour-id="tour-history" type="button" onClick={() => exportCustodyPdf(custodyEvents)}>
           <FileText className="h-4 w-4" /> Export PDF
         </button>
       </div>
@@ -1929,7 +1954,7 @@ function createCustodyPdf(events: ReturnType<typeof useForenxStore>["custodyEven
   return pdf;
 }
 
-function SettingsView() {
+function SettingsView({ onStartTour }: { onStartTour: () => void }) {
   const router = useRouter();
   const { authMode, backendMode, currentUser, role, resetDemo, signOut } = useForenxStore();
   const workspace = settingsWorkspace(role);
@@ -1978,6 +2003,9 @@ function SettingsView() {
             ]}
           />
           <div className="mt-3 flex flex-wrap gap-2">
+            <button className="btn-secondary" data-tour-id="tour-settings" type="button" onClick={onStartTour}>
+              Start website tour
+            </button>
             {authMode === "Demo" && (
               <button className="btn-secondary" type="button" onClick={() => setShowResetConfirmation(true)}>
                 <RotateCcw className="mr-2 h-4 w-4" /> Reset demo
